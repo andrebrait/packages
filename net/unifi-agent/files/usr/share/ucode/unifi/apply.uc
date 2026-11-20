@@ -82,7 +82,9 @@ export function apply(text, profile, opts) {
 	let c = cursor(opts.uci_dir, opts.save_dir);
 	let notes = [];
 
-	if (profile.type == 'usw' || length(profile.ports))
+	// Switch keys come for switches and for APs with a built-in switch; an
+	// AP without them keeps its bridge as it is.
+	if (length(filter(keys(cfg), (k) => match(k, /^switch\.(vlan|port)\./))))
 		notes = [ ...notes, ...sw.plan(cfg, profile, c) ];
 
 	if (length(profile.radios))

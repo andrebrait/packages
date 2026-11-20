@@ -8,6 +8,7 @@ import * as http from 'unifi.http';
 import * as collect from 'unifi.collect';
 import * as apply from 'unifi.apply';
 import * as wifi from 'unifi.wifi';
+import * as sshadopt from 'unifi.sshadopt';
 
 export const STATE_DIR = '/etc/unifi-agent';
 const STATE = STATE_DIR + '/state.json';
@@ -154,6 +155,29 @@ export function handle(st, profile, msg) {
 export function step(st, profile) {
 	let url = st.inform_url ?? profile.inform_url;
 
+	// SSH adoption: the ubnt account exists only while pending.
+	if (profile.ssh_port) {
+		sshadopt.account(!st.authkey);
+
+		for (let r in sshadopt.take()) {
+			if (st.authkey) {
+				log('ignoring an SSH adoption request: already adopted');
+				continue;
+			}
+
+			st.inform_url = r.url;
+			url = r.url;
+
+			if (r.key) {
+				st.authkey = r.key;
+				log(`adopted over SSH, informing ${r.url}`);
+			}
+			else {
+				log(`inform URL set over SSH: ${r.url}`);
+			}
+		}
+	}
+
 	if (!url) {
 		log('no inform_url configured');
 		return 60;
@@ -162,7 +186,8 @@ export function step(st, profile) {
 	let adopted = !!st.authkey;
 	let key = st.authkey ?? inform.DEFAULT_KEY;
 	let gcm = adopted && !!st.use_gcm;
-	let payload = collect.inform(profile, { ...st, inform_url: url });
+	let payload = collect.inform(profile, { ...st, inform_url: url },
+		(profile.ssh_port && !adopted) ? { sshd_port: profile.ssh_port } : null);
 	let pkt = inform.encode(payload.mac, key, gcm, sprintf('%J', payload));
 	let r = http.post(url, pkt);
 

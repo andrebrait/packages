@@ -120,7 +120,7 @@ function local_radios(uci) {
 
 	uci.foreach('wireless', 'wifi-device', (s) => {
 		let band = BANDS[s.band] ?? ((+s.channel > 14) ? 'na' : (s.hwmode == '11a' ? 'na' : 'ng'));
-		push(radios, { device: s['.name'], radio: band, disabled: s.disabled == '1' });
+		push(radios, { device: s['.name'], radio: band, disabled: s.disabled == '1', channel: s.channel });
 	});
 
 	return radios;
@@ -265,7 +265,7 @@ export function load(opts) {
 	for (let r in radios) {
 		for (let i, m in mradios) {
 			if (m && m.radio == r.radio) {
-				push(rmapped, { ...m, device: r.device, name: `wifi${length(rmapped)}` });
+				push(rmapped, { ...m, device: r.device, channel: r.channel, name: `wifi${length(rmapped)}` });
 				mradios[i] = null;
 				break;
 			}
@@ -289,6 +289,7 @@ export function load(opts) {
 		radios: rmapped,
 		unmapped_radios: filter(radios, (r) => !(r.device in map(rmapped, (m) => m.device))),
 		candidates: slice(candidates, 0, 5),
+		ssh_port: (main.ssh_adopt != '0') ? +(main.ssh_port ?? 2222) : null,
 		hostname: main.hostname,
 		mac: main.mac
 	};

@@ -1,0 +1,29 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Login shell of the temporary "ubnt" account (and forced command of the
+# adoption SSH instance). A UniFi controller adopts a pending device by
+# logging in as ubnt/ubnt and running
+#   syswrapper.sh set-adopt <inform URL> <authkey>   (or set-inform <URL>)
+# This records such a request for unifi-agent, which checks it, and does
+# nothing else: every other command gets empty output and exit status 0.
+
+SPOOL=/tmp/unifi-agent/ssh
+
+record() {
+	case "$1" in
+	*set-adopt*|*set-inform*) ;;
+	*) return 0 ;;
+	esac
+	f="$SPOOL/req.$$.$(date +%s).$RANDOM"
+	printf '%s\n' "$1" | head -c 1024 > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+if [ -n "$SSH_ORIGINAL_COMMAND" ]; then
+	record "$SSH_ORIGINAL_COMMAND"
+elif [ "$1" = "-c" ] && [ "$2" != "$0" ] && [ "$2" != /usr/libexec/unifi-agent/ssh-adopt ]; then
+	record "$2"
+else
+	head -c 65536 | while IFS= read -r line; do record "$line"; done
+fi
+
+exit 0

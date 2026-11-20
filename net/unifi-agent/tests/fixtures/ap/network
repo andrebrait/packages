@@ -1,0 +1,8 @@
+config device
+	option name 'br-lan'
+	option type 'bridge'
+	list ports 'lan'
+
+config interface 'lan'
+	option device 'br-lan'
+	option proto 'dhcp'
