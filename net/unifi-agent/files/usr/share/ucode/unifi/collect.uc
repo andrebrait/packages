@@ -92,13 +92,20 @@ export function system_stats() {
 
 // Parses `ethtool -m` into the sfp_* fields the controller shows.
 export function parse_sfp(text) {
-	let f = {}, out = { sfp_found: false };
+	let f = {}, types = [], out = { sfp_found: false };
 
+	// ucode regexes are POSIX: no lazy quantifiers, so the key ends on its
+	// last non-blank character instead.
 	for (let line in split(text ?? '', '\n')) {
-		let m = match(line, /^\s*([^:]+?)\s*: (.*)$/);
+		let m = match(line, /^[ \t]*([^:]*[^: \t])[ \t]*: (.*)$/);
 
-		if (m)
-			f[m[1]] ??= trim(m[2]);
+		if (!m)
+			continue;
+
+		f[m[1]] ??= trim(m[2]);
+
+		if (m[1] == 'Transceiver type')
+			push(types, trim(m[2]));
 	}
 
 	if (!length(f))
@@ -107,8 +114,13 @@ export function parse_sfp(text) {
 	let first = (v) => trim(split(v ?? '', /\s+[(\[]/)[0]);
 	let dbm = (v) => { let m = match(v ?? '', /(-?[0-9.]+) dBm/); return m ? sprintf('%.2f', +m[1]) : null; };
 	let degc = (v) => { let m = match(v ?? '', /(-?[0-9.]+) degrees C/); return m ? sprintf('%.2f', +m[1]) : null; };
-	let comp = f['Transceiver type'] ?? f['Transceiver codes'] ?? '';
-	let cm = match(comp, /(10G Base-[A-Z]+|1000BASE-[A-Z]+|Active Cable|Passive Cable|Copper cable)/i);
+	// The most telling of the listed types: 10G optics first, then cables.
+	let comp = join('; ', types) || f['Transceiver codes'] || '';
+	let cm = null;
+
+	for (let re in [ /(10G Base-[A-Z]+)/i, /(Active Cable|Passive Cable|Copper cable)/i, /(1000BASE-[A-Z]+)/i ])
+		if ((cm = match(comp, re)))
+			break;
 
 	out.sfp_found = true;
 	out.sfp_eeprom = true;
