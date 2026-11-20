@@ -66,7 +66,9 @@ else if (cmd == 'plan' && ARGV[1]) {
 
 	let r = apply.apply(text, profile.load(), { dry_run: true, log: (m) => print(m, '\n') });
 
-	if (!r.changed)
+	if (r.deferred)
+		print('plan not computed\n');
+	else if (!r.changed)
 		print('no changes\n');
 
 	if (length(r.unhandled))

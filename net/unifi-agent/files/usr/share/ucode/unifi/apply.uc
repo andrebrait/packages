@@ -82,14 +82,23 @@ export function apply(text, profile, opts) {
 	// libuci always loads the shared delta directory (/tmp/.uci) too, so
 	// changes a user staged with the uci CLI would be committed with the
 	// controller's. Wait until they are committed or reverted.
-	let user = cursor(opts.uci_dir, opts.user_save_dir);
+	let staged = () => {
+		let user = cursor(opts.uci_dir, opts.user_save_dir);
 
-	for (let pkg in PACKAGES) {
-		if (length(user.changes(pkg)?.[pkg] ?? [])) {
-			log(`uncommitted uci changes to ${pkg}; commit or revert them, the controller's settings wait until then`);
-			return { changed: false, applied: false, rolled_back: false, deferred: true, notes: [], plan: [], unhandled: unhandled(cfg) };
-		}
-	}
+		for (let pkg in PACKAGES)
+			if (length(user.changes(pkg)?.[pkg] ?? []))
+				return pkg;
+
+		return null;
+	};
+	let deferred = (pkg) => {
+		log(`uncommitted uci changes to ${pkg}; commit or revert them, the controller's settings wait until then`);
+		return { changed: false, applied: false, rolled_back: false, deferred: true, notes: [], plan: [], unhandled: unhandled(cfg) };
+	};
+	let pending = staged();
+
+	if (pending)
+		return deferred(pending);
 
 	// The agent's own deltas, apart from the CLI's and from a concurrent
 	// `unifi-agent plan`.
@@ -166,6 +175,16 @@ export function apply(text, profile, opts) {
 
 			return res;
 		}
+	}
+
+	// The CLI may have staged something while this was planned.
+	pending = staged();
+
+	if (pending) {
+		for (let p in touched)
+			c.revert(p);
+
+		return deferred(pending);
 	}
 
 	for (let pkg in touched)

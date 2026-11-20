@@ -88,8 +88,7 @@ export function parse(cmd) {
 	}
 
 	// The controller always sends an IP-literal inform URL.
-	// No leading zeros: the resolver would read such an octet as octal.
-	if (!match(url, /^http:\/\/(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}(:[1-9][0-9]{0,4})?\/inform$/))
+	if (!util.inform_url_ok(url))
 		return null;
 
 	return { url, key };

@@ -290,7 +290,7 @@ export function load(opts) {
 		enabled: util.bool(main.enabled, false),
 		inform_url: main.inform_url,
 		apply: util.bool(main.apply, true),
-		interval: +(main.interval ?? 10),
+		interval: (+main.interval >= 1) ? +main.interval : 10,
 		bridge,
 		mgmt_interface: iface,
 		model,

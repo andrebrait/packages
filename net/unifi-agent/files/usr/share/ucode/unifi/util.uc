@@ -37,8 +37,10 @@ export function read_json(path) {
 };
 
 // Atomic write. With a mode, the file gets it before any data is in it.
+// The temporary name is unique, so two writers never share it.
 export function write_file(path, data, mode) {
-	let tmp = `${path}.tmp`;
+	let now = clock();
+	let tmp = `${path}.${now[0]}${now[1]}.tmp`;
 
 	if (mode != null && (writefile(tmp, '') == null || !chmod(tmp, mode)))
 		return false;
@@ -61,6 +63,21 @@ export function mkdir_p(path, mode) {
 		if (!stat(p))
 			mkdir(p, mode ?? 0o755);
 	}
+};
+
+// An inform URL as the controller sends it: http://<IPv4>[:port]/inform.
+// Octets with leading zeros are refused: the resolver reads them as octal.
+export function inform_url_ok(url) {
+	let m = match(url ?? '', /^http:\/\/(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})(:([1-9][0-9]{0,4}))?\/inform$/);
+
+	if (!m)
+		return false;
+
+	for (let i = 1; i <= 4; i++)
+		if (+m[i] > 255)
+			return false;
+
+	return m[6] == null || +m[6] <= 65535;
 };
 
 // A UCI boolean, read the way config_get_bool does.

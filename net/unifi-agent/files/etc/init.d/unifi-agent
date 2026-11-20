@@ -21,6 +21,8 @@ start_service() {
 	procd_set_param command /usr/sbin/unifi-agent run
 	# Restart on any config change, so SSH adoption follows its setting.
 	procd_set_param file /etc/config/unifi-agent
+	# A stop waits for a running apply to finish its rollback window.
+	procd_set_param term_timeout 90
 	procd_set_param respawn 3600 5 0
 	procd_set_param stderr 1
 	procd_close_instance
@@ -36,7 +38,8 @@ start_service() {
 }
 
 service_stopped() {
-	# After the agent is gone, so it cannot re-create the adoption account.
+	# The agent removes the adoption account itself on SIGTERM; this covers
+	# an agent that was killed. Both writers use their own temporary files.
 	/usr/sbin/unifi-agent cleanup
 }
 

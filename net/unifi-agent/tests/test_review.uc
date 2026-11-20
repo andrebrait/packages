@@ -76,15 +76,19 @@ t.ok('lan3' in c.get('network', c.get_first('network', 'device'), 'ports'), 'for
 
 // Changes staged with the uci CLI (the shared delta dir) are never
 // committed with the controller's: the config waits, unacknowledged.
-let user = cursor('/tmp/uci-r');
+let user = cursor('/tmp/uci-r', '/tmp/uci-r/user');
 user.set('network', 'lan', 'ipaddr', '10.9.9.9');
 user.save('network');
 let r = apply.apply('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\nswitch.port.1.isolation=enabled\n',
-	{ ...profile, apply: true }, { uci_dir: '/tmp/uci-r', save_dir: '/tmp/uci-r/agent', log: () => null });
+	{ ...profile, apply: true }, { uci_dir: '/tmp/uci-r', save_dir: '/tmp/uci-r/agent', user_save_dir: '/tmp/uci-r/user', log: () => null });
 t.ok(r.deferred && !r.applied, 'apply deferred while the CLI has staged changes');
-t.eq(cursor('/tmp/uci-r').changes('network')?.network, [ [ 'set', 'lan', 'ipaddr', '10.9.9.9' ] ], 'user delta untouched');
+t.eq(cursor('/tmp/uci-r', '/tmp/uci-r/user').changes('network')?.network, [ [ 'set', 'lan', 'ipaddr', '10.9.9.9' ] ], 'user delta untouched');
 t.ok(index(readfile('/tmp/uci-r/network'), '10.9.9.9') < 0, 'user delta not committed');
-unlink('/tmp/.uci/network');
+unlink('/tmp/uci-r/user/network');
+
+// The inform URL check: IPv4 literal, octet and port ranges.
+t.ok(util.inform_url_ok('http://10.0.0.2:8080/inform') && !util.inform_url_ok('http://999.0.0.1/inform') &&
+	!util.inform_url_ok('http://10.0.0.2:99999/inform') && !util.inform_url_ok('http://10.0.0.02/inform'), 'inform URL check');
 
 // With the management VLAN missing, a LAG change touches no bond or port.
 c = cursor('/tmp/uci-r', '/tmp/uci-r/save4');

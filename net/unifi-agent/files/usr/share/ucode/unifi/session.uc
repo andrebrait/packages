@@ -52,8 +52,7 @@ export function forget(st) {
 };
 
 const KEY_RE = /^[0-9a-fA-F]{32}$/;
-// No leading zeros: the resolver would read such an octet as octal.
-const URL_RE = /^http:\/\/(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}(:[1-9][0-9]{0,4})?\/inform$/;
+
 
 function handle_mgmt(st, text) {
 	let m = util.parse_kv(text);
@@ -71,16 +70,24 @@ function handle_mgmt(st, text) {
 		st.cfgversion = m.cfgversion;
 }
 
+// Applies a system_cfg. Returns false when it was deferred.
 function handle_system(st, profile, text, cfgversion) {
 	util.mkdir_p(RUN_DIR, 0o755);
 	util.write_file(`${RUN_DIR}/system_cfg`, text, 0o600);
 
-	let res = apply.apply(text, profile, { inform_url: st.inform_url ?? profile.inform_url, log });
+	// A deferred config comes back on every inform: say why only once.
+	let quiet = (st._deferred == cfgversion);
+	let res = apply.apply(text, profile, { inform_url: st.inform_url ?? profile.inform_url,
+		log: quiet ? () => null : log });
 
 	util.write_file(`${RUN_DIR}/unhandled`, length(res.unhandled) ? join('\n', res.unhandled) + '\n' : '');
 
-	if (res.deferred)
-		return;	// not acknowledged: the controller sends it again
+	if (res.deferred) {
+		st._deferred = cfgversion;
+		return false;	// not acknowledged: the controller sends it again
+	}
+
+	delete st._deferred;
 
 	if (res.rolled_back)
 		log(`config ${cfgversion} rolled back; it stays acknowledged so the controller does not resend it`);
@@ -90,6 +97,7 @@ function handle_system(st, profile, text, cfgversion) {
 		log(`config ${cfgversion} planned only (apply is off)`);
 
 	st.cfgversion = cfgversion;
+	return true;
 }
 
 // Handles one controller reply. Returns seconds until the next inform.
@@ -100,13 +108,21 @@ export function handle(st, profile, msg) {
 		return +(msg.interval ?? profile.interval);
 
 	if (t == 'setparam') {
+		let acked = st.cfgversion;
+
 		if (msg.mgmt_cfg)
 			handle_mgmt(st, msg.mgmt_cfg);
 
-		if (msg.system_cfg)
-			handle_system(st, profile, msg.system_cfg, msg.cfgversion ?? st.cfgversion);
-		else if (msg.cfgversion)
+		if (msg.system_cfg) {
+			if (!handle_system(st, profile, msg.system_cfg, msg.cfgversion ?? st.cfgversion)) {
+				// Keep reporting the old version, so the controller resends.
+				st.cfgversion = acked;
+				return profile.interval;
+			}
+		}
+		else if (msg.cfgversion) {
 			st.cfgversion = msg.cfgversion;
+		}
 
 		if (msg.blocked_sta != null)
 			st.blocked = wifi.parse_blocked(msg.blocked_sta);
@@ -123,7 +139,7 @@ export function handle(st, profile, msg) {
 			else if (msg.key)
 				log('ignoring set-adopt with a malformed key');
 
-			if (msg.uri && match(msg.uri, URL_RE))
+			if (msg.uri && util.inform_url_ok(msg.uri))
 				st.inform_url = msg.uri;
 			else if (msg.uri)
 				log('ignoring set-adopt with an inform URL that is not http://<IP>[:port]/inform');
@@ -260,16 +276,33 @@ export function run(profile) {
 
 	log(`running as ${profile.model} (${profile.model_display}), ${length(profile.ports)} ports, ${length(profile.radios)} radios`);
 
-	// procd stops the agent with SIGTERM: never leave the adoption account.
-	signal('TERM', () => {
+	// procd stops the agent with SIGTERM: never leave the adoption account,
+	// and never stop between applying a config and its reachability check,
+	// which is the only chance to roll it back.
+	let busy = false, stopping = false;
+	let stop = () => {
 		sshadopt.account(false);
 		exit(0);
+	};
+
+	signal('TERM', () => {
+		if (busy)
+			stopping = true;
+		else
+			stop();
 	});
 
 	while (true) {
+		busy = true;
+
 		let next = step(st, profile);
 
-		if (next < 1)
+		busy = false;
+
+		if (stopping)
+			stop();
+
+		if (!(next >= 1))
 			next = 1;
 
 		// Renewed every round, reply or not, and longer than the wait.
