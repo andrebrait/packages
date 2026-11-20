@@ -368,6 +368,11 @@ export function plan(cfg, profile, c) {
 		let forced = sp.autoneg == 'disabled';
 		let fl = false;
 
+		// SFP/SFP+ ports: 10GBASE-R has no autonegotiation, so a pause setting
+		// is forced, and setting one left an LG510S SFP+ port in 1000base-x
+		// with no link after a reboot. Flow control and EEE stay unset there.
+		let fiber = !!match(p.model_media ?? p.media ?? '', /^Q?SFP/);
+
 		for (let vid, m in members)
 			if (m[p.idx] && fastleave[vid])
 				fl = true;
@@ -376,12 +381,14 @@ export function plan(cfg, profile, c) {
 		setopt(c, 'network', sec, 'autoneg', forced ? '0' : null);
 		setopt(c, 'network', sec, 'speed', forced ? sp.speed : null);
 		setopt(c, 'network', sec, 'duplex', forced ? ((sp.duplex == 'disabled') ? '0' : '1') : null);
-		setopt(c, 'network', sec, 'pause', (sp.flowctrl == 'enabled') ? '1' : '0');
+		setopt(c, 'network', sec, 'pause', fiber ? null : ((sp.flowctrl == 'enabled') ? '1' : '0'));
 		setopt(c, 'network', sec, 'isolate', (sp.isolation == 'enabled') ? '1' : null);
 		setopt(c, 'network', sec, 'mtu', mtu);
 		setopt(c, 'network', sec, 'multicast_fast_leave', fl ? '1' : null);
 
-		if (sp.eee != null)
+		if (fiber)
+			setopt(c, 'network', sec, 'eee', null);
+		else if (sp.eee != null)
 			setopt(c, 'network', sec, 'eee', (sp.eee == 'enabled') ? '1' : '0');
 
 		if (p.poe && sp.poe != null)

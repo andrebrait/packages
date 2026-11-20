@@ -8,7 +8,7 @@ config agent 'main'
 	# A model from `unifi-agent models`, or auto to pick from the hardware.
 	option model 'auto'
 	# 0: translate and log the controller's settings, change nothing.
-	option apply '1'
+	option apply '0'
 	# The interface the device is managed on.
 	option interface 'lan'
 	# The bridge whose ports the controller manages; default: the bridge

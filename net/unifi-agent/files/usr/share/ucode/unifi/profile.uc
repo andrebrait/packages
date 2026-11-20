@@ -306,7 +306,8 @@ export function load(opts) {
 	return {
 		enabled: util.bool(main.enabled, false),
 		inform_url: main.inform_url,
-		apply: util.bool(main.apply, true),
+		// Unset means log only: applying needs an explicit yes.
+		apply: util.bool(main.apply, false),
 		interval: (+main.interval >= 1) ? +main.interval : 10,
 		bridge,
 		mgmt_interface: iface,

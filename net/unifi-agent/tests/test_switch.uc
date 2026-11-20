@@ -71,4 +71,19 @@ sw.plan(util.parse_kv('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.v
 t.ok('eth9:t' in cx.get('network', 'unifi_vlan10', 'ports'), 'unmanaged trunk keeps VLAN 10 tagged');
 t.ok(!('eth9:u*' in cx.get('network', 'unifi_vlan1', 'ports')), 'unmanaged trunk not made untagged');
 
+// SFP ports never get flow control or EEE, and an existing pause is removed.
+system(`rm -rf /tmp/uci-p && mkdir -p /tmp/uci-p/save && cp '${DIR}'/lg510s-vlanonly/* /tmp/uci-p/`);
+let cp0 = cursor('/tmp/uci-p');
+cp0.set('network', 'old5', 'device');
+cp0.set('network', 'old5', 'name', 'lan5');
+cp0.set('network', 'old5', 'pause', '1');
+cp0.commit('network');
+let cp = cursor('/tmp/uci-p', '/tmp/uci-p/save');
+let fprofile = { ...profile, bridge: 'switch', ports: map(profile.ports, (x) => ({ ...x, model_media: (x.idx >= 5) ? 'SFP+' : 'GE' })) };
+sw.plan(util.parse_kv('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\nswitch.port.1.flowctrl=enabled\nswitch.port.5.flowctrl=enabled\nswitch.port.6.flowctrl=enabled\nswitch.port.5.eee=enabled\n'), fprofile, cp);
+t.eq(cp.get('network', 'old5', 'pause'), null, 'pause removed from an SFP port');
+t.eq(cp.get('network', 'unifi_lan6', 'pause'), null, 'no pause set on an SFP port');
+t.eq(cp.get('network', 'old5', 'eee'), null, 'no EEE on an SFP port');
+t.eq(cp.get('network', 'unifi_lan1', 'pause'), '1', 'copper still gets flow control');
+
 t.done();
