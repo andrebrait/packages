@@ -115,6 +115,25 @@ function bridge_ports(uci, bridge) {
 	return sort(ports, util.natcmp);
 }
 
+// The bridge behind the management interface (lan on br-lan, or on
+// switch.1 with VLAN filtering), else the first bridge.
+function find_bridge(uci, iface) {
+	let dev = split(uci.get('network', iface, 'device') ?? '', '.')[0];
+	let found = null, first = null;
+
+	uci.foreach('network', 'device', (s) => {
+		if (s.type != 'bridge')
+			return;
+
+		first ??= s.name;
+
+		if (s.name == dev)
+			found = s.name;
+	});
+
+	return found ?? first ?? 'br-lan';
+}
+
 function local_radios(uci) {
 	let radios = [];
 
@@ -219,7 +238,8 @@ export function load(opts) {
 	let uci = cursor(opts.uci_dir);
 	let main = uci.get_all('unifi-agent', 'main') ?? {};
 	let models = opts.models ?? load_models(opts.models_path);
-	let bridge = main.bridge ?? 'br-lan';
+	let iface = main.interface ?? 'lan';
+	let bridge = main.bridge ?? find_bridge(uci, iface);
 	let probe = opts.probe ?? probe_port;
 	let ports = [], radios = [];
 
@@ -278,7 +298,7 @@ export function load(opts) {
 		apply: main.apply != '0',
 		interval: +(main.interval ?? 10),
 		bridge,
-		mgmt_interface: main.interface ?? 'lan',
+		mgmt_interface: iface,
 		model,
 		model_display: entry.name ?? model,
 		type: entry.type ?? 'usw',
@@ -290,6 +310,7 @@ export function load(opts) {
 		unmapped_radios: filter(radios, (r) => !(r.device in map(rmapped, (m) => m.device))),
 		candidates: slice(candidates, 0, 5),
 		ssh_port: (main.ssh_adopt != '0') ? +(main.ssh_port ?? 2222) : null,
+		locate_led: main.locate_led,
 		hostname: main.hostname,
 		mac: main.mac
 	};

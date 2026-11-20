@@ -9,6 +9,7 @@ import * as collect from 'unifi.collect';
 import * as apply from 'unifi.apply';
 import * as wifi from 'unifi.wifi';
 import * as sshadopt from 'unifi.sshadopt';
+import * as led from 'unifi.led';
 
 export const STATE_DIR = '/etc/unifi-agent';
 const STATE = STATE_DIR + '/state.json';
@@ -114,6 +115,9 @@ export function handle(st, profile, msg) {
 		}
 		else if (cmd == 'set-locate' || cmd == 'unset-locate') {
 			st.locating = (cmd == 'set-locate');
+
+			if (!led.locate(st.locating, profile.locate_led))
+				log('no LED to blink for locate');
 		}
 		else if (wifi.command(profile, msg)) {
 			// handled by the wireless side

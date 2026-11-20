@@ -48,4 +48,8 @@ let et = profile.parse_ethtool(`Settings for lan1:
 t.eq(et.speed_caps, 1049064, 'speed_caps from ethtool matches the lab value');
 t.eq(et.speeds, [ 100, 1000, 2500, 5000, 10000 ], 'speeds');
 
+// The LG510S image: bridge "switch", lan on switch.1.
+let lg = profile.load({ uci_dir: DIR + '/lg510s', models, probe: lg510s });
+t.eq([ lg.bridge, lg.model, length(lg.ports) ], [ 'switch', 'US6XG150', 6 ], 'bridge found from lan device');
+
 t.done();

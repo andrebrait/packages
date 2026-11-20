@@ -1,0 +1,24 @@
+config device
+	option name 'switch'
+	option type 'bridge'
+	option vlan_filtering '1'
+	list ports 'lan1'
+	list ports 'lan2'
+	list ports 'lan3'
+	list ports 'lan4'
+	list ports 'lan5'
+	list ports 'lan6'
+
+config bridge-vlan
+	option device 'switch'
+	option vlan '1'
+	list ports 'lan1:u*'
+	list ports 'lan2:u*'
+	list ports 'lan3:u*'
+	list ports 'lan4:u*'
+	list ports 'lan5:u*'
+	list ports 'lan6:u*'
+
+config interface 'lan'
+	option device 'switch.1'
+	option proto 'dhcp'

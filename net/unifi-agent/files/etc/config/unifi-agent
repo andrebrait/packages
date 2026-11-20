@@ -9,15 +9,18 @@ config agent 'main'
 	option model 'auto'
 	# 0: translate and log the controller's settings, change nothing.
 	option apply '1'
-	# The bridge whose ports the controller manages.
-	option bridge 'br-lan'
 	# The interface the device is managed on.
 	option interface 'lan'
+	# The bridge whose ports the controller manages; default: the bridge
+	# the management interface is on.
+	#option bridge 'br-lan'
 	option interval '10'
 	# While pending, accept the controller's SSH adoption (user ubnt,
 	# password ubnt) on this port; the account can only adopt.
 	option ssh_adopt '1'
 	option ssh_port '2222'
+	# LED blinked by the controller's Locate (default: first status LED).
+	#option locate_led 'green:status'
 
 # Map UniFi ports to local ports. Without port sections every port of the
 # bridge is reported, copper before fibre, in the order of the model.
