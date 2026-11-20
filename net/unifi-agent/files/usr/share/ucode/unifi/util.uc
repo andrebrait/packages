@@ -150,7 +150,8 @@ export function run_json(argv) {
 
 // Natural order: lan2 before lan10.
 export function natcmp(a, b) {
-	let ma = match(a, /^(.*?)([0-9]+)$/), mb = match(b, /^(.*?)([0-9]+)$/);
+	// POSIX regexes have no lazy quantifier: the prefix ends on a non-digit.
+	let ma = match(a, /^(|.*[^0-9])([0-9]+)$/), mb = match(b, /^(|.*[^0-9])([0-9]+)$/);
 
 	if (ma && mb && ma[1] == mb[1])
 		return +ma[2] - +mb[2];

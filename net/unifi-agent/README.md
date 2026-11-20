@@ -2,7 +2,7 @@
 
 Lets a UniFi Network controller adopt an OpenWrt device as a UniFi switch or access point, apply its settings, and show its status. The agent is written in ucode, plus a small C module for AES. The package is about 35 KB (122 KB installed, most of it the model catalog), so it fits devices with 16 MiB of flash.
 
-The agent speaks the UniFi inform protocol. Before a device is adopted it uses the factory key; after adoption it uses the key the controller assigns, with AES-GCM once the controller asks for it. Firmware upgrades from the controller are always refused, because Ubiquiti firmware would brick the device.
+The agent speaks the UniFi inform protocol. Before a device is adopted it uses the factory key; after adoption it uses the key the controller assigns, with AES-GCM once the controller asks for it. Firmware upgrades from the controller are always refused, because Ubiquiti firmware would brick the device. After a refusal the agent reports the offered version as its own, so the controller stops offering it; to have the controller offer it again, run `unifi-agent forget` (or edit `/etc/unifi-agent/state.json`).
 
 ## Setup
 

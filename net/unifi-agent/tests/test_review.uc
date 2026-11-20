@@ -146,4 +146,11 @@ cb.commit('unifi-agent');
 gp = profile_mod.load({ uci_dir: '/tmp/uci-b', models, probe: (d) => ({ media: 'GE', speeds: [], speed_caps: 0, max_speed: 0 }) });
 t.eq(length(gp.ports), 0, 'all port sections disabled: nothing discovered');
 
+// A refused upgrade makes the agent report the offered version.
+let su = {};
+session.handle(su, { interval: 10, radios: [] }, { _type: 'upgrade', version: '7.6.11.17272' });
+t.eq(su.version, '7.6.11.17272', 'offered version reported after refusal');
+session.handle(su, { interval: 10, radios: [] }, { _type: 'upgrade', version: '7; reboot' });
+t.eq(su.version, '7.6.11.17272', 'odd version ignored');
+
 t.done();

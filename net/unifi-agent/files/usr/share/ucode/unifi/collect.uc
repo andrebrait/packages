@@ -92,23 +92,43 @@ export function system_stats() {
 
 // Parses `ethtool -m` into the sfp_* fields the controller shows.
 export function parse_sfp(text) {
-	let f = {}, out = { sfp_found: false };
+	let f = {}, types = [], out = { sfp_found: false };
 
+	// ucode regexes are POSIX: no lazy quantifiers, so the key ends on its
+	// last non-blank character instead.
 	for (let line in split(text ?? '', '\n')) {
-		let m = match(line, /^\s*([^:]+?)\s*: (.*)$/);
+		let m = match(line, /^[ \t]*([^:]*[^: \t])[ \t]*: (.*)$/);
 
-		if (m)
-			f[m[1]] ??= trim(m[2]);
+		if (!m)
+			continue;
+
+		f[m[1]] ??= trim(m[2]);
+
+		if (m[1] == 'Transceiver type')
+			push(types, trim(m[2]));
 	}
 
 	if (!length(f))
 		return out;
 
 	let first = (v) => trim(split(v ?? '', /\s+[(\[]/)[0]);
-	let dbm = (v) => { let m = match(v ?? '', /(-?[0-9.]+) dBm/); return m ? sprintf('%.2f', +m[1]) : null; };
+	// No light at all prints "-inf dBm": report it as -40 dBm.
+	let dbm = (v) => {
+		if (match(v ?? '', /-inf dBm/))
+			return '-40.00';
+
+		let m = match(v ?? '', /(-?[0-9.]+) dBm/);
+		return m ? sprintf('%.2f', +m[1]) : null;
+	};
 	let degc = (v) => { let m = match(v ?? '', /(-?[0-9.]+) degrees C/); return m ? sprintf('%.2f', +m[1]) : null; };
-	let comp = f['Transceiver type'] ?? f['Transceiver codes'] ?? '';
-	let cm = match(comp, /(10G Base-[A-Z]+|1000BASE-[A-Z]+|Active Cable|Passive Cable|Copper cable)/i);
+	// The most telling of the listed types: 10G optics first, then cables,
+	// then 1G; else the first type as printed.
+	let comp = join('; ', types);
+	let cm = null;
+
+	for (let re in [ /(10G Base-[A-Z]+)/i, /(Active Cable|Passive Cable)/i, /(1000BASE-[A-Z]+)/i ])
+		if ((cm = match(comp, re)))
+			break;
 
 	out.sfp_found = true;
 	out.sfp_eeprom = true;
@@ -116,17 +136,24 @@ export function parse_sfp(text) {
 	out.sfp_part = f['Vendor PN'];
 	out.sfp_serial = f['Vendor SN'];
 	out.sfp_rev = f['Vendor rev'];
-	out.sfp_compliance = cm ? cm[1] : first(comp);
+	out.sfp_compliance = cm ? cm[1] : first(types[0]);
 	out.sfp_temperature = degc(f['Module temperature']);
 	out.sfp_voltage = (match(f['Module voltage'] ?? '', /([0-9.]+) V/) ?? [])[1];
 	out.sfp_current = (match(f['Laser bias current'] ?? '', /([0-9.]+) mA/) ?? [])[1];
 	out.sfp_txpower = dbm(f['Laser output power']);
-	out.sfp_rxpower = dbm(f['Receiver signal average optical power'] ?? f['Rcvr signal avg optical power']);
-	out.sfp_txfault = (f['TX fault'] == 'On' || f['Laser tx fault'] == 'On');
-	out.sfp_rxfault = (f['Rx loss of signal'] == 'On' || f['RX loss of signal'] == 'On');
+	out.sfp_rxpower = dbm(f['Receiver signal average optical power'] ?? f['Receiver signal OMA']);
 
+	// ethtool decodes no fault bits for SFP; QSFP/CMIS print per-lane lists
+	// such as "[ Yes, No, No, No ]" or "None".
+	if (f['Tx fault'] != null)
+		out.sfp_txfault = !!match(f['Tx fault'], /Yes/);
+
+	if (f['Rx loss of signal'] != null)
+		out.sfp_rxfault = !!match(f['Rx loss of signal'], /Yes/);
+
+	// Drop what is unknown; false is a value (in ucode false == '' is true).
 	for (let k in keys(out))
-		if (out[k] == null || out[k] == '')
+		if (out[k] == null || (type(out[k]) == 'string' && out[k] == ''))
 			delete out[k];
 
 	return out;
@@ -360,7 +387,7 @@ export function inform(profile, state, extra) {
 		serial: uc(replace(mac, /:/g, '')),
 		model: profile.model,
 		model_display: profile.model_display,
-		version: profile.version,
+		version: state.version ?? profile.version,
 		hostname: profile.hostname ?? util.read('/proc/sys/kernel/hostname') ?? 'OpenWrt',
 		ip: mgmt.ip ?? state.ip ?? '0.0.0.0',
 		netmask: mgmt.netmask,

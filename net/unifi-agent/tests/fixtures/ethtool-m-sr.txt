@@ -1,0 +1,14 @@
+	Identifier                                : 0x03 (SFP)
+	Transceiver type                          : 10G Ethernet: 10G Base-SR
+	Transceiver type                          : Ethernet: 1000BASE-SX
+	Vendor name                               : FS
+	Vendor PN                                 : SFP-10GSR-85
+	Vendor rev                                : A
+	Vendor SN                                 : F2030812345
+	Laser bias current                        : 6.026 mA
+	Laser output power                        : 0.5878 mW / -2.31 dBm
+	Receiver signal average optical power     : 0.0000 mW / -inf dBm
+	Module temperature                        : 35.00 degrees C / 95.00 degrees F
+	Module voltage                            : 3.3054 V
+	Laser output power high alarm             : Off
+	Laser output power high alarm threshold   : 1.0000 mW / 0.00 dBm
