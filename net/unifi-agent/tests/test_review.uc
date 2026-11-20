@@ -10,7 +10,7 @@ import * as apply from 'unifi.apply';
 import * as struct from 'struct';
 import * as zlib from 'zlib';
 import { cursor } from 'uci';
-import { readfile, stat } from 'fs';
+import { readfile, stat, unlink } from 'fs';
 
 const DIR = sourcepath(0, true) + '/fixtures';
 const K = inform.DEFAULT_KEY;
@@ -74,19 +74,32 @@ sw.plan(util.parse_kv('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.v
 t.eq(c.get('network', 'unifi_lag1'), null, 'stale bond removed');
 t.ok('lan3' in c.get('network', c.get_first('network', 'device'), 'ports'), 'former member back in the bridge');
 
-// Apply never reads or reverts deltas a user staged in the default save dir.
-let user = cursor('/tmp/uci-r', '/tmp/uci-r/user');
+// Changes staged with the uci CLI (the shared delta dir) are never
+// committed with the controller's: the config waits, unacknowledged.
+let user = cursor('/tmp/uci-r');
 user.set('network', 'lan', 'ipaddr', '10.9.9.9');
 user.save('network');
-apply.apply('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\nswitch.port.1.isolation=enabled\n',
-	{ ...profile, apply: true }, { dry_run: true, uci_dir: '/tmp/uci-r', save_dir: '/tmp/uci-r/agent', log: () => null });
-t.eq(cursor('/tmp/uci-r', '/tmp/uci-r/user').changes('network')?.network, [ [ 'set', 'lan', 'ipaddr', '10.9.9.9' ] ], 'user delta untouched');
+let r = apply.apply('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\nswitch.port.1.isolation=enabled\n',
+	{ ...profile, apply: true }, { uci_dir: '/tmp/uci-r', save_dir: '/tmp/uci-r/agent', log: () => null });
+t.ok(r.deferred && !r.applied, 'apply deferred while the CLI has staged changes');
+t.eq(cursor('/tmp/uci-r').changes('network')?.network, [ [ 'set', 'lan', 'ipaddr', '10.9.9.9' ] ], 'user delta untouched');
+t.ok(index(readfile('/tmp/uci-r/network'), '10.9.9.9') < 0, 'user delta not committed');
+unlink('/tmp/.uci/network');
+
+// With the management VLAN missing, a LAG change touches no bond or port.
+c = cursor('/tmp/uci-r', '/tmp/uci-r/save4');
+sw.plan(util.parse_kv('switch.managementvlan=10\nswitch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\nswitch.port.3.opmode=aggregate\nswitch.port.3.lag=1\nswitch.port.4.opmode=aggregate\nswitch.port.4.lag=1\n'), profile, c);
+t.eq(filter(c.changes('network')?.network ?? [], (ch) => match(ch[1], /lag/) || ch[2] == 'ports'), [], 'no bond or port change without the management VLAN');
 
 // SSH adoption: a ubnt account the agent did not create is left alone,
 // and the spool's parent is traversable.
 system('rm -rf /tmp/ssh-r && mkdir -p /tmp/ssh-r/etc && printf "ubnt:x:1000:1000::/home/ubnt:/bin/ash\\n" > /tmp/ssh-r/etc/passwd && : > /tmp/ssh-r/etc/shadow && : > /tmp/ssh-r/etc/shells');
 t.ok(!ssh.account(true, '/tmp/ssh-r'), 'foreign ubnt not replaced');
 t.ok(!ssh.account(false, '/tmp/ssh-r'), 'foreign ubnt not removed');
+system('printf "root:x:0:0::/root:/bin/ash\\n" > /tmp/ssh-r/etc/passwd && printf "/bin/ash\\n" > /tmp/ssh-r/etc/shells');
+ssh.account(true, '/tmp/ssh-r');
+ssh.account(false, '/tmp/ssh-r');
+t.eq(readfile('/tmp/ssh-r/etc/shells'), '/bin/ash\n', 'shells entry removed on cleanup');
 system('printf "root:x:0:0::/root:/bin/ash\\n" > /tmp/ssh-r/etc/passwd && mkdir -p /tmp/ssh-r/tmp/unifi-agent && chmod 700 /tmp/ssh-r/tmp/unifi-agent');
 ssh.account(true, '/tmp/ssh-r');
 t.eq(sprintf('%o', stat('/tmp/ssh-r/tmp/unifi-agent').mode & 0o7777), '755', 'spool parent opened up');

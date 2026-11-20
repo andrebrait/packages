@@ -179,53 +179,63 @@ export function plan(cfg, profile, c) {
 		}
 	}
 
-	let bonds = {};
-
-	c.foreach('network', 'device', (s) => {
-		if (s.type == 'bonding' && match(s['.name'], /^unifi_lag[0-9]+$/))
-			bonds[s['.name']] = true;
-	});
-
-	for (let l, members in lags) {
-		let sec = `unifi_lag${l}`;
-
-		if (!bonds[sec]) {
-			c.set('network', sec, 'device');
-			c.set('network', sec, 'type', 'bonding');
-		}
-
-		delete bonds[sec];
-		setopt(c, 'network', sec, 'name', `lag${l}`);
-		setopt(c, 'network', sec, 'ports', map(sort(members, (a, b) => a - b), (n) => by_idx[n].dev));
-		setopt(c, 'network', sec, 'policy', '802.3ad');
-		setopt(c, 'network', sec, 'xmit_hash_policy', 'layer2+3');
-		setopt(c, 'network', sec, 'lacp_rate', 'slow');
-	}
-
-	for (let sec in keys(bonds))
-		c.delete('network', sec);
-
-	// Bridge ports: members of a lag are replaced by the bond. Ports the
-	// controller does not manage stay as they are.
-	let managed = {};
+	// Without the management VLAN among the controller's VLANs, bonds,
+	// bridge ports and VLANs stay as they are: changing them alone could
+	// leave ports, or the device itself, without a VLAN.
+	let mvid = +(cfg['switch.managementvlan'] ?? 1);
+	let members = membership(sw, length(profile.model_ports));
+	let vlan_ok = members[mvid] != null;
+	let managed = {}, brports = c.get('network', brsec, 'ports') ?? [];
 
 	for (let p in profile.ports)
 		managed[p.dev] = p.idx;
 
-	let brports = [];
+	if (vlan_ok) {
+		let bonds = {};
 
-	for (let d in c.get('network', brsec, 'ports') ?? [])
-		if (!(d in brports) && !(managed[d] && lag_of[managed[d]]) && !match(d, /^lag[0-9]+$/))
-			push(brports, d);
+		c.foreach('network', 'device', (s) => {
+			if (s.type == 'bonding' && match(s['.name'], /^unifi_lag[0-9]+$/))
+				bonds[s['.name']] = true;
+		});
 
-	for (let p in profile.ports)
-		if (!lag_of[p.idx] && !(p.dev in brports))
-			push(brports, p.dev);
+		for (let l, members in lags) {
+			let sec = `unifi_lag${l}`;
 
-	for (let l in keys(lags))
-		push(brports, `lag${l}`);
+			if (!bonds[sec]) {
+				c.set('network', sec, 'device');
+				c.set('network', sec, 'type', 'bonding');
+			}
 
-	setopt(c, 'network', brsec, 'ports', brports);
+			delete bonds[sec];
+			setopt(c, 'network', sec, 'name', `lag${l}`);
+			setopt(c, 'network', sec, 'ports', map(sort(members, (a, b) => a - b), (n) => by_idx[n].dev));
+			setopt(c, 'network', sec, 'policy', '802.3ad');
+			setopt(c, 'network', sec, 'xmit_hash_policy', 'layer2+3');
+			setopt(c, 'network', sec, 'lacp_rate', 'slow');
+		}
+
+		for (let sec in keys(bonds))
+			c.delete('network', sec);
+
+		// Bridge ports: members of a lag are replaced by the bond. Ports the
+		// controller does not manage stay as they are.
+		let old = brports;
+
+		brports = [];
+
+		for (let d in old)
+			if (!(d in brports) && !(managed[d] && lag_of[managed[d]]) && !match(d, /^lag[0-9]+$/))
+				push(brports, d);
+
+		for (let p in profile.ports)
+			if (!lag_of[p.idx] && !(p.dev in brports))
+				push(brports, p.dev);
+
+		for (let l in keys(lags))
+			push(brports, `lag${l}`);
+
+		setopt(c, 'network', brsec, 'ports', brports);
+	}
 
 	// Bridge-wide settings.
 	let jumbo = cfg['switch.jumboframes'] == 'enabled';
@@ -253,8 +263,6 @@ export function plan(cfg, profile, c) {
 	setopt(c, 'network', brsec, 'multicast_querier', null);
 
 	// VLANs: the agent owns every bridge-vlan of the bridge.
-	let mvid = +(cfg['switch.managementvlan'] ?? 1);
-	let members = membership(sw, length(profile.model_ports));
 	let want = {};
 
 	for (let vid, m in members) {
@@ -277,7 +285,7 @@ export function plan(cfg, profile, c) {
 		want[vid] = sort(list);
 	}
 
-	if (!want[mvid]) {
+	if (!vlan_ok) {
 		// Filtering without the management VLAN would cut the device off.
 		push(notes, `management VLAN ${mvid} is not among the controller's VLANs; VLAN settings left unchanged`);
 	}

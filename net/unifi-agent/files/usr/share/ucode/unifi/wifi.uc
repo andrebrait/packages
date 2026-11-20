@@ -580,14 +580,15 @@ function deauth(profile, mac, ban_ms) {
 		{ addr: mac, reason: 5, deauth: true, ban_time: ban_ms }));
 }
 
-// Blocked clients get a 30 s ban renewed on every inform, so an unblock
-// takes effect when the renewal stops (hostapd cannot lift a ban early).
-export function enforce_blocked(profile, macs) {
+// Blocked clients get a short ban renewed on every inform round, so an
+// unblock takes effect when the renewal stops (hostapd cannot lift a ban
+// early).
+export function enforce_blocked(profile, macs, ban_ms) {
 	if (!length(profile.radios))
 		return;
 
 	for (let mac in macs ?? [])
-		deauth(profile, mac, 30000);
+		deauth(profile, mac, ban_ms ?? 60000);
 };
 
 // blocked_sta from setparam: comma-separated MACs.

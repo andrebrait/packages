@@ -3,7 +3,7 @@
 // the controller can no longer be reached afterwards.
 
 import { cursor } from 'uci';
-import { readfile, unlink, lsdir } from 'fs';
+import { readfile, unlink, lsdir, stat } from 'fs';
 import * as socket from 'socket';
 import * as util from 'unifi.util';
 import * as http from 'unifi.http';
@@ -79,9 +79,21 @@ export function apply(text, profile, opts) {
 
 	let log = opts.log ?? warn;
 	let cfg = util.parse_kv(text);
-	// A private delta directory: changes a user staged with uci (in
-	// /tmp/.uci) are never read, committed or reverted here.
-	let save_dir = opts.save_dir ?? '/tmp/unifi-agent/uci';
+	// libuci always loads the shared delta directory (/tmp/.uci) too, so
+	// changes a user staged with the uci CLI would be committed with the
+	// controller's. Wait until they are committed or reverted.
+	let user = cursor(opts.uci_dir, opts.user_save_dir);
+
+	for (let pkg in PACKAGES) {
+		if (length(user.changes(pkg)?.[pkg] ?? [])) {
+			log(`uncommitted uci changes to ${pkg}; commit or revert them, the controller's settings wait until then`);
+			return { changed: false, applied: false, rolled_back: false, deferred: true, notes: [], plan: [], unhandled: unhandled(cfg) };
+		}
+	}
+
+	// The agent's own deltas, apart from the CLI's and from a concurrent
+	// `unifi-agent plan`.
+	let save_dir = opts.save_dir ?? (opts.dry_run ? '/tmp/unifi-agent/uci-plan' : '/tmp/unifi-agent/uci');
 
 	util.mkdir_p(save_dir, 0o700);
 
@@ -140,10 +152,11 @@ export function apply(text, profile, opts) {
 	util.mkdir_p(BACKUP, 0o700);
 
 	let confdir = opts.uci_dir ?? '/etc/config';
-	let backup = {};
+	let backup = {}, modes = {};
 
 	for (let pkg in touched) {
 		backup[pkg] = readfile(`${confdir}/${pkg}`);
+		modes[pkg] = (stat(`${confdir}/${pkg}`)?.mode ?? 0o644) & 0o777;
 
 		if (backup[pkg] != null && !util.write_file(`${BACKUP}/${pkg}`, backup[pkg], 0o600)) {
 			log(`cannot back up ${pkg}; nothing applied`);
@@ -176,7 +189,7 @@ export function apply(text, profile, opts) {
 			if (backup[pkg] == null)
 				unlink(`${confdir}/${pkg}`);
 			else
-				util.write_file(`${confdir}/${pkg}`, backup[pkg]);
+				util.write_file(`${confdir}/${pkg}`, backup[pkg], modes[pkg]);
 		}
 
 		reload(touched);

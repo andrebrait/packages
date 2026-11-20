@@ -51,9 +51,12 @@ export function account(present, root) {
 	let changed = edit(`${root}/etc/passwd`, `${USER}:x:${UID}:${UID}:UniFi adoption:/var/empty:${SHELL}`, present);
 	changed = edit(`${root}/etc/shadow`, `${USER}:${HASH}:0:0:99999:7:::`, present) || changed;
 
-	if (present) {
-		let shells = readfile(`${root}/etc/shells`) ?? '';
+	let shells = readfile(`${root}/etc/shells`) ?? '';
 
+	if (!present && index(shells, SHELL) >= 0)
+		util.write_file(`${root}/etc/shells`, join('', map(filter(split(shells, '\n'), (l) => l != '' && l != SHELL), (l) => l + '\n')), 0o644);
+
+	if (present) {
 		if (index(shells, SHELL) < 0)
 			util.write_file(`${root}/etc/shells`, shells + SHELL + '\n', 0o644);
 

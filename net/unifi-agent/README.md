@@ -85,7 +85,7 @@ A model with more ports than the device works: the extra UniFi ports are simply 
 
 After a commit the agent reloads the network (and Wi-Fi), then checks that the controller can still be reached. If it can't within a minute, the previous configuration is restored. The backup is kept in memory: a reboot inside that minute keeps the new configuration. If the management VLAN is not among the controller's VLANs, the VLAN settings are left unchanged, so the device stays reachable. WLANs the controller no longer lists are disabled, never deleted.
 
-The agent works on its own copy of the UCI changes. Changes you staged with `uci set` but did not commit are never committed or reverted by it.
+Changes staged with the `uci` command but not committed are never committed with the controller's: while there are any for `network`, `wireless` or `switchdev`, the agent waits, logs why, and leaves the controller's configuration unacknowledged, so the controller sends it again. LuCI keeps its staged changes apart, so they do not count.
 
 Settings the agent does not carry out are not claimed in the device's capabilities, so the controller does not offer them. Settings it receives but does not apply are listed in `/tmp/unifi-agent/unhandled`. Examples: storm control, per-port STP edge or BPDU guard, 802.1X, port security, and on access points WLAN schedules, rate limits and the guest portal.
 
@@ -102,7 +102,7 @@ A controller adopts a device on its own subnet by logging in over SSH as `ubnt` 
 - a `ubnt` account, whose login shell is `/usr/libexec/unifi-agent/ssh-adopt`. That handler records `set-adopt` and `set-inform` requests and does nothing else.
 - a dropbear instance on `ssh_port` (default 2222, reported to the controller), which runs only that handler for every login, refuses root password logins, and allows no port forwarding (`-j -k`).
 
-The agent accepts a request only while it is pending, and only with an IP-literal inform URL and a 32-digit key. It removes the account once adopted, when SSH adoption or the agent is turned off, when the service stops, and when the package is removed. An existing `ubnt` account that the agent did not create is never touched.
+The agent accepts a request only while it is pending, and only with an IP-literal inform URL and a 32-digit key. It removes the account once adopted, when SSH adoption or the agent is turned off, when the service stops (including at shutdown), and when the package is removed. One case is left to you: if the service is disabled while a device is pending with SSH adoption on, run `unifi-agent cleanup`. An existing `ubnt` account that the agent did not create is never touched.
 
 It is off by default, and is best turned on only for the adoption itself, for two reasons:
 

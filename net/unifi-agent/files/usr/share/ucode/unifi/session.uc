@@ -78,6 +78,9 @@ function handle_system(st, profile, text, cfgversion) {
 
 	util.write_file(`${RUN_DIR}/unhandled`, length(res.unhandled) ? join('\n', res.unhandled) + '\n' : '');
 
+	if (res.deferred)
+		return;	// not acknowledged: the controller sends it again
+
 	if (res.rolled_back)
 		log(`config ${cfgversion} rolled back; it stays acknowledged so the controller does not resend it`);
 	else if (res.applied)
@@ -245,7 +248,6 @@ export function step(st, profile) {
 	}
 
 	let next = handle(st, profile, msg);
-	wifi.enforce_blocked(profile, st.blocked);
 	save_state(st);
 
 	return next;
@@ -257,8 +259,20 @@ export function run(profile) {
 
 	log(`running as ${profile.model} (${profile.model_display}), ${length(profile.ports)} ports, ${length(profile.radios)} radios`);
 
+	// procd stops the agent with SIGTERM: never leave the adoption account.
+	signal('TERM', () => {
+		sshadopt.account(false);
+		exit(0);
+	});
+
 	while (true) {
 		let next = step(st, profile);
-		sleep(((next > 0) ? next : 1) * 1000);
+
+		if (next < 1)
+			next = 1;
+
+		// Renewed every round, reply or not, and longer than the wait.
+		wifi.enforce_blocked(profile, st.blocked, (next + 30) * 1000);
+		sleep(next * 1000);
 	}
 };
