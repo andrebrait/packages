@@ -42,7 +42,7 @@ The agent speaks the UniFi inform protocol. Before a device is adopted it uses t
 3. In the controller, adopt the device. It appears as pending, under the chosen model's name.
 4. Watch the log with `logread -e unifi-agent`. Every change the controller asks for is logged as a plan line before it is applied.
 
-Out of the box, and whenever `option apply` is unset, the agent only logs what it would change; set `option apply '1'` to apply. (Before release 3 an unset `apply` meant on; on upgrade, a config without it gets `apply '1'` once, so it keeps applying.) `unifi-agent plan <file>` translates a saved `system_cfg` without changing anything. The last one received is kept in `/tmp/unifi-agent/system_cfg`.
+Out of the box, and whenever `option apply` is unset, the agent only logs what it would change; set `option apply '1'` to apply. `unifi-agent plan <file>` translates a saved `system_cfg` without changing anything. The last one received is kept in `/tmp/unifi-agent/system_cfg`.
 
 LuCI users get the same front panel and every setting under Services → UniFi controller (`luci-app-unifi-agent`).
 
