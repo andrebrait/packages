@@ -1,0 +1,10 @@
+#!/bin/sh
+# Before release 3 an unset "apply" meant on, and LuCI removed the option
+# whenever the box was checked. Keep that meaning for existing configs;
+# fresh installs ship apply '0'.
+[ -f /etc/config/unifi-agent ] || exit 0
+uci -q get unifi-agent.main >/dev/null || exit 0
+[ -n "$(uci -q get unifi-agent.main.apply)" ] && exit 0
+uci set unifi-agent.main.apply='1'
+uci commit unifi-agent
+exit 0

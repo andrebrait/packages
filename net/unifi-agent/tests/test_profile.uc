@@ -57,4 +57,7 @@ t.eq([ lg.bridge, lg.model, length(lg.ports) ], [ 'switch', 'US6XG150', 6 ], 'br
 let vo = profile.load({ uci_dir: DIR + '/lg510s-vlanonly', models, probe: lg510s });
 t.eq([ vo.bridge, vo.model, map(vo.ports, (x) => x.dev) ], [ 'switch', 'US6XG150', [ 'lan1', 'lan2', 'lan3', 'lan4', 'lan5', 'lan6' ] ], 'ports from bridge-vlan only');
 
+// Without an apply option the agent only logs.
+t.eq(p.apply, false, 'apply unset means log only');
+
 t.done();
