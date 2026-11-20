@@ -8,6 +8,7 @@ import * as session from 'unifi.session';
 import * as collect from 'unifi.collect';
 import * as apply from 'unifi.apply';
 import * as diagram from 'unifi.diagram';
+import * as sshadopt from 'unifi.sshadopt';
 
 const USAGE = `Usage: unifi-agent <command>
 
@@ -17,6 +18,7 @@ const USAGE = `Usage: unifi-agent <command>
   plan <file>         translate a saved system_cfg and print the UCI changes
   dump                print the next inform payload
   forget              drop the controller's key and go back to pending
+  cleanup             remove the SSH adoption account (run when stopping)
 `;
 
 let cmd = ARGV[0];
@@ -25,6 +27,7 @@ if (cmd == 'run') {
 	let p = profile.load();
 
 	if (!p.enabled) {
+		sshadopt.account(false);
 		warn('unifi-agent: disabled in /etc/config/unifi-agent\n');
 		exit(0);
 	}
@@ -72,6 +75,9 @@ else if (cmd == 'plan' && ARGV[1]) {
 else if (cmd == 'dump') {
 	let p = profile.load();
 	printf('%.J\n', collect.inform(p, session.load_state()));
+}
+else if (cmd == 'cleanup') {
+	sshadopt.account(false);
 }
 else if (cmd == 'forget') {
 	session.forget();

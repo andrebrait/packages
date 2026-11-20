@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run the agent's tests in the dev container (see tests/README).
+# Run the agent's tests in the dev container (see README.md).
 # Usage: tests/run.sh  (from net/unifi-agent)
 set -e
 B=/tmp/unifi-build

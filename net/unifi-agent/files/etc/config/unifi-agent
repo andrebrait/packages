@@ -15,9 +15,11 @@ config agent 'main'
 	# the management interface is on.
 	#option bridge 'br-lan'
 	option interval '10'
-	# While pending, accept the controller's SSH adoption (user ubnt,
-	# password ubnt) on this port; the account can only adopt.
-	option ssh_adopt '1'
+	# Accept the controller's SSH adoption, which it uses for a device on
+	# its own subnet: while pending, user ubnt (password ubnt) can log in on
+	# this port to adopt. See the README before turning it on: on port 22,
+	# that login can also forward TCP connections while the device is pending.
+	option ssh_adopt '0'
 	option ssh_port '2222'
 	# LED blinked by the controller's Locate (default: first status LED).
 	#option locate_led 'green:status'

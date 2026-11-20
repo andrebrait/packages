@@ -3,7 +3,7 @@
 // the controller can no longer be reached afterwards.
 
 import { cursor } from 'uci';
-import { readfile, writefile, stat } from 'fs';
+import { readfile, unlink, lsdir } from 'fs';
 import * as socket from 'socket';
 import * as util from 'unifi.util';
 import * as http from 'unifi.http';
@@ -50,7 +50,7 @@ function reload(pkgs) {
 	if ('wireless' in pkgs)
 		system('wifi reload');
 
-	if ('switchdev' in pkgs && stat('/etc/init.d/switchdev'))
+	if ('switchdev' in pkgs && sw.has_switchdev())
 		system('/etc/init.d/switchdev restart');
 }
 
@@ -79,7 +79,16 @@ export function apply(text, profile, opts) {
 
 	let log = opts.log ?? warn;
 	let cfg = util.parse_kv(text);
-	let c = cursor(opts.uci_dir, opts.save_dir);
+	// A private delta directory: changes a user staged with uci (in
+	// /tmp/.uci) are never read, committed or reverted here.
+	let save_dir = opts.save_dir ?? '/tmp/unifi-agent/uci';
+
+	util.mkdir_p(save_dir, 0o700);
+
+	for (let f in lsdir(save_dir) ?? [])
+		unlink(`${save_dir}/${f}`);
+
+	let c = cursor(opts.uci_dir, save_dir);
 	let notes = [];
 
 	// Switch keys come for switches and for APs with a built-in switch; an
@@ -93,7 +102,7 @@ export function apply(text, profile, opts) {
 	let changes = {}, touched = [];
 
 	for (let pkg in PACKAGES) {
-		let ch = c.changes(pkg)?.[pkg] ?? c.changes(pkg);
+		let ch = c.changes(pkg)?.[pkg];
 
 		if (type(ch) == 'array' && length(ch)) {
 			changes[pkg] = ch;
@@ -126,13 +135,25 @@ export function apply(text, profile, opts) {
 		return res;
 	}
 
-	// Back up, commit, reload, check, and undo on failure.
-	util.mkdir_p(BACKUP);
+	// Back up, commit, reload, check, and undo on failure. A package file
+	// that did not exist is removed again on rollback.
+	util.mkdir_p(BACKUP, 0o700);
 
 	let confdir = opts.uci_dir ?? '/etc/config';
+	let backup = {};
 
-	for (let pkg in touched)
-		writefile(`${BACKUP}/${pkg}`, readfile(`${confdir}/${pkg}`) ?? '');
+	for (let pkg in touched) {
+		backup[pkg] = readfile(`${confdir}/${pkg}`);
+
+		if (backup[pkg] != null && !util.write_file(`${BACKUP}/${pkg}`, backup[pkg], 0o600)) {
+			log(`cannot back up ${pkg}; nothing applied`);
+
+			for (let p in touched)
+				c.revert(p);
+
+			return res;
+		}
+	}
 
 	for (let pkg in touched)
 		c.commit(pkg);
@@ -151,8 +172,12 @@ export function apply(text, profile, opts) {
 	if (!ok) {
 		log('controller unreachable after applying; rolling back');
 
-		for (let pkg in touched)
-			util.write_file(`${confdir}/${pkg}`, readfile(`${BACKUP}/${pkg}`) ?? '');
+		for (let pkg in touched) {
+			if (backup[pkg] == null)
+				unlink(`${confdir}/${pkg}`);
+			else
+				util.write_file(`${confdir}/${pkg}`, backup[pkg]);
+		}
 
 		reload(touched);
 		res.rolled_back = true;

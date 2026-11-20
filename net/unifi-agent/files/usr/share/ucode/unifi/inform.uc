@@ -52,8 +52,9 @@ export function encode(mac, keyhex, gcm, plain, iv) {
 };
 
 // Returns { flags, mac, data } with data the decrypted, inflated payload
-// string, or { error }.
-export function decode(body, keyhex) {
+// string, or { error }. Unencrypted packets are refused, and so are CBC
+// packets when require_gcm is set.
+export function decode(body, keyhex, require_gcm) {
 	if (length(body) < HDR_LEN)
 		return { error: 'short packet' };
 
@@ -69,6 +70,12 @@ export function decode(body, keyhex) {
 
 	if (len > length(body) - HDR_LEN)
 		return { error: 'truncated payload' };
+
+	if (!(flags & (FLAG_ENCRYPTED | FLAG_GCM)))
+		return { error: 'unencrypted packet' };
+
+	if (require_gcm && !(flags & FLAG_GCM))
+		return { error: 'not AES-GCM' };
 
 	let data = substr(body, HDR_LEN, len);
 	let key = hexdec(keyhex ?? '');

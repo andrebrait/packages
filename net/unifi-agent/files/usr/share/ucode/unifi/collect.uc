@@ -5,6 +5,8 @@ import { readfile, stat, lsdir } from 'fs';
 import * as util from 'unifi.util';
 import * as wifi from 'unifi.wifi';
 import * as sw from 'unifi.switch';
+import { is_fiber } from 'unifi.profile';
+import { cursor } from 'uci';
 
 const STP_STATES = [ 'disabled', 'listening', 'learning', 'forwarding', 'blocking' ];
 
@@ -206,10 +208,10 @@ export function port_row(p, dyn) {
 		row.flowctrl_tx = dyn.flowctrl;
 	}
 
-	if (dyn?.eee != null)
+	if (p.eee)
 		row.port_caps |= 1;
 
-	if (match(row.media ?? '', /^Q?SFP/))
+	if (is_fiber(row.media))
 		for (let k, v in sfp_info(dev))
 			row[k] = v;
 
@@ -282,12 +284,29 @@ export function lldp_table(ports) {
 	return out;
 }
 
-// Live per-port values from `ethtool <dev>`.
-function port_dynamic(dev) {
+// netifd device options per device name, as the agent last applied them.
+function device_options() {
+	let out = {};
+
+	cursor().foreach('network', 'device', (s) => {
+		if (s.name)
+			out[s.name] = s;
+	});
+
+	return out;
+}
+
+// Per-port values: autoneg live from ethtool; flow control and PoE as
+// configured, since netifd's pause and pse options are what the controller set.
+function port_dynamic(dev, opts) {
 	let out = util.run([ 'ethtool', dev ]) ?? '';
 	let an = match(out, /Auto-negotiation: (on|off)/);
 
-	return { autoneg: an ? an[1] == 'on' : null };
+	return {
+		autoneg: an ? an[1] == 'on' : null,
+		flowctrl: (opts?.pause != null) ? util.bool(opts.pause, false) : null,
+		pse: util.bool(opts?.pse, false)
+	};
 }
 
 function cidr_mask(bits) {
@@ -361,9 +380,10 @@ export function inform(profile, state, extra) {
 
 	if (length(profile.ports)) {
 		let macs = mac_tables(profile.bridge, profile.ports);
+		let devopts = device_options();
 
 		m.port_table = map(profile.ports, (p) => {
-			let row = port_row(p, port_dynamic(p.dev));
+			let row = port_row(p, port_dynamic(p.dev, devopts[p.dev]));
 			row.mac_table = macs[p.dev] ?? [];
 			return row;
 		});
@@ -374,7 +394,7 @@ export function inform(profile, state, extra) {
 
 	if (profile.type == 'usw') {
 		m.switch_caps = sw.caps();
-		m.stp_priority = state.stp_priority ?? '32768';
+		m.stp_priority = util.read(`/sys/class/net/${profile.bridge}/bridge/priority`) ?? '32768';
 	}
 
 	if (profile.type == 'uap')

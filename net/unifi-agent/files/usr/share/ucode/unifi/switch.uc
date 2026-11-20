@@ -22,7 +22,8 @@
 //                                          device multicast_fast_leave
 // Anything else under switch.* is reported back as unhandled.
 
-import { stat } from 'fs';
+import { stat, readfile } from 'fs';
+import { setopt, matches_any } from 'unifi.util';
 
 const HANDLED = [
 	/^switch\.vlan\.[0-9]+\.(id|mode|status|igmp_snooping|igmp_fastleave|igmp_querier_status)$/,
@@ -36,11 +37,7 @@ const HANDLED = [
 ];
 
 export function handled(key) {
-	for (let re in HANDLED)
-		if (match(key, re))
-			return true;
-
-	return false;
+	return matches_any(HANDLED, key);
 };
 
 // Whether the optional switchdev-config package is installed.
@@ -48,39 +45,24 @@ export function has_switchdev() {
 	return !!stat('/etc/init.d/switchdev');
 };
 
+// LACP needs the bonding driver, loaded or installed.
+function has_bonding() {
+	return !!(stat('/sys/module/bonding') || stat('/sys/class/net/bonding_masters') ||
+		stat(`/lib/modules/${trim(readfile('/proc/sys/kernel/osrelease') ?? '')}/bonding.ko`));
+}
+
 // switch_caps for the inform, from what this device can carry out.
 export function caps() {
 	let sd = has_switchdev();
 
 	return {
-		feature_caps: 4 | 64 | 256 | 8192 | 524288 | (sd ? 32 : 0),
+		feature_caps: 4 | 64 | 256 | 524288 | (sd ? 32 : 0) | (has_bonding() ? 8192 : 0),
 		max_aggregate_sessions: 3,
 		max_mirror_sessions: sd ? 1 : 0,
 		stp_caps: 0,
 		vlan_caps: 7
 	};
 };
-
-function same(a, b) {
-	return sprintf('%J', a) == sprintf('%J', b);
-}
-
-// Sets (or, for null, deletes) one option only when it differs, so an
-// unchanged config leaves no uci delta behind.
-function setopt(c, pkg, sec, opt, val) {
-	let cur = c.get(pkg, sec, opt);
-
-	if (type(val) == 'int' || type(val) == 'double' || type(val) == 'bool')
-		val = (type(val) == 'bool') ? (val ? '1' : '0') : `${val}`;
-
-	if (val == null) {
-		if (cur != null)
-			c.delete(pkg, sec, opt);
-	}
-	else if (!same(cur, val)) {
-		c.set(pkg, sec, opt, val);
-	}
-}
 
 function find_section(c, pkg, type, match_fn) {
 	let found = null;
@@ -250,7 +232,6 @@ export function plan(cfg, profile, c) {
 	let mtu = jumbo ? +(cfg['switch.mtu'] ?? 9216) : null;
 	let stp = cfg['switch.stp.status'] == 'enabled';
 
-	setopt(c, 'network', brsec, 'vlan_filtering', '1');
 	setopt(c, 'network', brsec, 'mtu', mtu);
 	setopt(c, 'network', brsec, 'stp', stp ? '1' : null);
 	setopt(c, 'network', brsec, 'stp_proto', stp ? ((cfg['switch.stp.version'] == 'stp') ? 'stp' : 'rstp') : null);
@@ -272,6 +253,7 @@ export function plan(cfg, profile, c) {
 	setopt(c, 'network', brsec, 'multicast_querier', null);
 
 	// VLANs: the agent owns every bridge-vlan of the bridge.
+	let mvid = +(cfg['switch.managementvlan'] ?? 1);
 	let members = membership(sw, length(profile.model_ports));
 	let want = {};
 
@@ -280,14 +262,14 @@ export function plan(cfg, profile, c) {
 
 		for (let n, mode in m) {
 			let dev = lag_of[n] ?? by_idx[n]?.dev;
-			let entry = (mode == 't') ? `${dev}:t` : (mode == 'u*') ? `${dev}:u*` : dev;
+			let entry = (mode == 'u') ? dev : `${dev}:${mode}`;
 
 			if (dev && !(entry in list))
 				push(list, entry);
 		}
 
-		// Unmanaged bridge ports keep untagged membership of the native VLAN.
-		if (vid == +(cfg['switch.managementvlan'] ?? 1))
+		// Unmanaged bridge ports keep untagged membership of the management VLAN.
+		if (vid == mvid)
 			for (let d in brports)
 				if (!managed[d] && !match(d, /^lag[0-9]+$/))
 					push(list, `${d}:u*`);
@@ -295,42 +277,47 @@ export function plan(cfg, profile, c) {
 		want[vid] = sort(list);
 	}
 
-	let have = {};
-
-	c.foreach('network', 'bridge-vlan', (s) => {
-		if (s.device == bridge)
-			have[s['.name']] = s;
-	});
-
-	for (let name, s in have) {
-		let vid = +s.vlan;
-
-		if (!want[vid] || name != `unifi_vlan${vid}`)
-			c.delete('network', name);
+	if (!want[mvid]) {
+		// Filtering without the management VLAN would cut the device off.
+		push(notes, `management VLAN ${mvid} is not among the controller's VLANs; VLAN settings left unchanged`);
 	}
+	else {
+		setopt(c, 'network', brsec, 'vlan_filtering', '1');
 
-	for (let vid, ports in want) {
-		let sec = `unifi_vlan${vid}`;
+		let have = {};
 
-		if (!have[sec]) {
-			c.set('network', sec, 'bridge-vlan');
-			c.set('network', sec, 'device', bridge);
-			c.set('network', sec, 'vlan', `${vid}`);
+		c.foreach('network', 'bridge-vlan', (s) => {
+			if (s.device == bridge)
+				have[s['.name']] = s;
+		});
+
+		for (let name, s in have) {
+			let vid = +s.vlan;
+
+			if (!want[vid] || name != `unifi_vlan${vid}`)
+				c.delete('network', name);
 		}
 
-		setopt(c, 'network', sec, 'ports', ports);
-		setopt(c, 'network', sec, 'mcast_snooping', igmp ? (snoop[vid] ? '1' : '0') : null);
-		setopt(c, 'network', sec, 'mcast_querier', querier[vid] ? '1' : null);
+		for (let vid, ports in want) {
+			let sec = `unifi_vlan${vid}`;
+
+			if (!have[sec]) {
+				c.set('network', sec, 'bridge-vlan');
+				c.set('network', sec, 'device', bridge);
+				c.set('network', sec, 'vlan', `${vid}`);
+			}
+
+			setopt(c, 'network', sec, 'ports', ports);
+			setopt(c, 'network', sec, 'mcast_snooping', igmp ? (snoop[vid] ? '1' : '0') : null);
+			setopt(c, 'network', sec, 'mcast_querier', querier[vid] ? '1' : null);
+		}
+
+		// The management interface rides the management VLAN.
+		let iface = profile.mgmt_interface;
+
+		if (c.get('network', iface, 'device') != null)
+			setopt(c, 'network', iface, 'device', `${bridge}.${mvid}`);
 	}
-
-	// The management interface rides the management VLAN.
-	let mvid = +(cfg['switch.managementvlan'] ?? 1);
-	let iface = profile.mgmt_interface;
-
-	if (!want[mvid])
-		push(notes, `management VLAN ${mvid} is not configured on the bridge; management interface left alone`);
-	else if (c.get('network', iface, 'device') != null)
-		setopt(c, 'network', iface, 'device', `${bridge}.${mvid}`);
 
 	// Per-port device options.
 	for (let p in profile.ports) {

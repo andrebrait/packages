@@ -9,6 +9,7 @@
 
 import { readfile, stat } from 'fs';
 import * as util from 'unifi.util';
+import { setopt } from 'unifi.util';
 
 const COUNTRIES = '/usr/share/unifi-agent/countries.json';
 const RUN_DIR = '/tmp/unifi-agent';
@@ -25,11 +26,7 @@ const HANDLED = [
 ];
 
 export function handled(key) {
-	for (let re in HANDLED)
-		if (match(key, re))
-			return true;
-
-	return false;
+	return util.matches_any(HANDLED, key);
 };
 
 function country(per, global) {
@@ -77,7 +74,7 @@ export function indices(cfg, top) {
 };
 
 // ieee_mode (11nght20, 11naht80, ...) to an OpenWrt htmode, keeping the
-// radio's HE/EHT family when it has one.
+// radio's HE/EHT family (any band) or VHT family (5 GHz) when it has one.
 export function htmode(mode, cur) {
 	if (!mode)
 		return null;
@@ -90,16 +87,17 @@ export function htmode(mode, cur) {
 			break;
 		}
 
+	cur ??= '';
+
+	for (let fam in [ 'EHT', 'HE' ])
+		if (substr(cur, 0, length(fam)) == fam)
+			return `${fam}${width}`;
+
 	if (index(mode, 'he') >= 0)
 		return `HE${width}`;
 
-	if (index(mode, 'vht') >= 0)
+	if (index(mode, 'vht') >= 0 || (index(mode, 'na') >= 0 && substr(cur, 0, 3) == 'VHT'))
 		return `VHT${width}`;
-
-	if (index(mode, 'na') >= 0)
-		for (let fam in [ 'EHT', 'HE', 'VHT' ])
-			if (substr(cur ?? '', 0, length(fam)) == fam)
-				return `${fam}${width}`;
 
 	return (width == '80' || width == '160') ? `VHT${width}` : `HT${width}`;
 };
@@ -215,18 +213,6 @@ function mac_acl(cfg, devname) {
 	}
 
 	return [ 'disable', [] ];
-}
-
-function setopt(c, pkg, sec, opt, val) {
-	let cur = c.get(pkg, sec, opt);
-
-	if (val == null) {
-		if (cur != null)
-			c.delete(pkg, sec, opt);
-	}
-	else if (sprintf('%J', cur) != sprintf('%J', val)) {
-		c.set(pkg, sec, opt, val);
-	}
 }
 
 // VLAN networks for WLANs: an unaddressed bridge over <uplink>.<vid>, as
@@ -594,31 +580,44 @@ function deauth(profile, mac, ban_ms) {
 		{ addr: mac, reason: 5, deauth: true, ban_time: ban_ms }));
 }
 
-// blocked_sta from setparam: comma-separated MACs, kept off with a ban that
-// is renewed on every setparam (a hostapd ban ends when hostapd restarts).
-export function blocked(profile, list) {
+// Blocked clients get a 30 s ban renewed on every inform, so an unblock
+// takes effect when the renewal stops (hostapd cannot lift a ban early).
+export function enforce_blocked(profile, macs) {
 	if (!length(profile.radios))
 		return;
 
-	for (let mac in split(list ?? '', ','))
-		if (match(trim(mac), /^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/))
-			deauth(profile, lc(trim(mac)), 86400000);
+	for (let mac in macs ?? [])
+		deauth(profile, mac, 30000);
 };
 
-export function command(profile, msg) {
-	if (!length(profile.radios))
+// blocked_sta from setparam: comma-separated MACs.
+export function parse_blocked(list) {
+	return filter(map(split(list ?? '', ','), (m) => lc(trim(m))),
+		(m) => match(m, /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/));
+};
+
+// Client commands. st.blocked holds the blocked clients.
+export function command(profile, msg, st) {
+	if (!length(profile.radios) || !msg.mac)
 		return false;
 
-	if (msg.cmd == 'kick-sta' && msg.mac) {
-		deauth(profile, lc(msg.mac), 0);
+	let mac = lc(msg.mac);
+
+	if (msg.cmd == 'kick-sta') {
+		deauth(profile, mac, 0);
 		return true;
 	}
 
-	if (msg.cmd == 'block-sta' && msg.mac) {
-		deauth(profile, lc(msg.mac), 86400000);
+	if (msg.cmd == 'block-sta') {
+		st.blocked = uniq([ ...(st.blocked ?? []), mac ]);
+		enforce_blocked(profile, [ mac ]);
 		return true;
 	}
 
-	// unblock-sta: the ban runs out; hostapd has no call to lift it early.
-	return msg.cmd == 'unblock-sta';
+	if (msg.cmd == 'unblock-sta') {
+		st.blocked = filter(st.blocked ?? [], (m) => m != mac);
+		return true;
+	}
+
+	return false;
 };

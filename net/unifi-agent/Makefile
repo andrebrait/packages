@@ -8,7 +8,6 @@ PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Andre Brait <andrebrait@gmail.com>
 PKG_LICENSE:=GPL-2.0-only
-PKG_LICENSE_FILES:=
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -33,6 +32,12 @@ endef
 define Package/unifi-agent/conffiles
 /etc/config/unifi-agent
 /etc/unifi-agent/
+endef
+
+define Package/unifi-agent/prerm
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] || /usr/sbin/unifi-agent cleanup
+exit 0
 endef
 
 define Build/Compile

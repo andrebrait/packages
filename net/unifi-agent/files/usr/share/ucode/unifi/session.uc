@@ -28,7 +28,7 @@ export function load_state() {
 function save_state(st) {
 	let keep = {};
 
-	for (let k in [ 'authkey', 'use_gcm', 'cfgversion', 'inform_url', 'mgmt_url', 'stp_priority' ])
+	for (let k in [ 'authkey', 'use_gcm', 'cfgversion', 'inform_url', 'mgmt_url', 'blocked' ])
 		if (st[k] != null)
 			keep[k] = st[k];
 
@@ -37,19 +37,27 @@ function save_state(st) {
 	if (st._saved == text)
 		return;
 
-	util.mkdir_p(STATE_DIR);
+	util.mkdir_p(STATE_DIR, 0o700);
 	util.write_file(STATE, text, 0o600);
 	st._saved = text;
 }
 
-export function forget() {
+// Drops the controller's key and everything it told us; st, when given,
+// is cleared in place.
+export function forget(st) {
 	unlink(STATE);
+
+	for (let k in keys(st ?? {}))
+		delete st[k];
 };
+
+const KEY_RE = /^[0-9a-fA-F]{32}$/;
+const URL_RE = /^http:\/\/[0-9]{1,3}(\.[0-9]{1,3}){3}(:[0-9]{1,5})?\/inform$/;
 
 function handle_mgmt(st, text) {
 	let m = util.parse_kv(text);
 
-	if (m.authkey && match(m.authkey, /^[0-9a-fA-F]{32}$/))
+	if (m.authkey && match(m.authkey, KEY_RE))
 		st.authkey = m.authkey;
 
 	if (m.use_aes_gcm != null)
@@ -63,13 +71,12 @@ function handle_mgmt(st, text) {
 }
 
 function handle_system(st, profile, text, cfgversion) {
-	util.mkdir_p(RUN_DIR);
+	util.mkdir_p(RUN_DIR, 0o755);
 	util.write_file(`${RUN_DIR}/system_cfg`, text, 0o600);
 
 	let res = apply.apply(text, profile, { inform_url: st.inform_url ?? profile.inform_url, log });
 
-	if (length(res.unhandled))
-		util.write_file(`${RUN_DIR}/unhandled`, join('\n', res.unhandled) + '\n');
+	util.write_file(`${RUN_DIR}/unhandled`, length(res.unhandled) ? join('\n', res.unhandled) + '\n' : '');
 
 	if (res.rolled_back)
 		log(`config ${cfgversion} rolled back; it stays acknowledged so the controller does not resend it`);
@@ -98,7 +105,7 @@ export function handle(st, profile, msg) {
 			st.cfgversion = msg.cfgversion;
 
 		if (msg.blocked_sta != null)
-			wifi.blocked(profile, msg.blocked_sta);
+			st.blocked = wifi.parse_blocked(msg.blocked_sta);
 
 		return 1;
 	}
@@ -107,11 +114,15 @@ export function handle(st, profile, msg) {
 		let cmd = msg.cmd;
 
 		if (cmd == 'set-adopt') {
-			if (msg.key)
-				st.authkey = msg.key;
+			if (msg.key && match(msg.key, KEY_RE))
+				st.authkey = lc(msg.key);
+			else if (msg.key)
+				log('ignoring set-adopt with a malformed key');
 
-			if (msg.uri)
+			if (msg.uri && match(msg.uri, URL_RE))
 				st.inform_url = msg.uri;
+			else if (msg.uri)
+				log('ignoring set-adopt with an inform URL that is not http://<IP>[:port]/inform');
 		}
 		else if (cmd == 'set-locate' || cmd == 'unset-locate') {
 			st.locating = (cmd == 'set-locate');
@@ -119,7 +130,7 @@ export function handle(st, profile, msg) {
 			if (!led.locate(st.locating, profile.locate_led))
 				log('no LED to blink for locate');
 		}
-		else if (wifi.command(profile, msg)) {
+		else if (wifi.command(profile, msg, st)) {
 			// handled by the wireless side
 		}
 		else {
@@ -143,10 +154,7 @@ export function handle(st, profile, msg) {
 
 	if (t == 'setdefault') {
 		log('controller asked for factory defaults; forgetting the controller only');
-		forget();
-
-		for (let k in keys(st))
-			delete st[k];
+		forget(st);
 
 		return 1;
 	}
@@ -159,10 +167,10 @@ export function handle(st, profile, msg) {
 export function step(st, profile) {
 	let url = st.inform_url ?? profile.inform_url;
 
-	// SSH adoption: the ubnt account exists only while pending.
-	if (profile.ssh_port) {
-		sshadopt.account(!st.authkey);
+	// SSH adoption: the ubnt account exists only while pending and enabled.
+	sshadopt.account(!!profile.ssh_port && !st.authkey);
 
+	if (profile.ssh_port) {
 		for (let r in sshadopt.take()) {
 			if (st.authkey) {
 				log('ignoring an SSH adoption request: already adopted');
@@ -193,6 +201,12 @@ export function step(st, profile) {
 	let payload = collect.inform(profile, { ...st, inform_url: url },
 		(profile.ssh_port && !adopted) ? { sshd_port: profile.ssh_port } : null);
 	let pkt = inform.encode(payload.mac, key, gcm, sprintf('%J', payload));
+
+	if (pkt == null) {
+		log('stored authkey is unusable; run "unifi-agent forget" to adopt again');
+		return 60;
+	}
+
 	let r = http.post(url, pkt);
 
 	if (r.error) {
@@ -208,22 +222,12 @@ export function step(st, profile) {
 		return profile.interval;
 	}
 
-	let d = inform.decode(r.body, key);
+	// Only encrypted replies count, and only GCM once it was negotiated:
+	// anyone on the path can answer a plain-HTTP inform.
+	let d = inform.decode(r.body, key, gcm);
 
-	if (d.error && adopted) {
-		// A controller that forgot this device answers with the default key.
-		let d0 = inform.decode(r.body, inform.DEFAULT_KEY);
-
-		if (!d0.error) {
-			log('controller replied with the default key; device was removed, back to pending');
-			forget();
-
-			for (let k in keys(st))
-				delete st[k];
-
-			d = d0;
-		}
-	}
+	if (d.error && adopted && !inform.decode(r.body, inform.DEFAULT_KEY, false).error)
+		d.error = 'reply uses the factory key; if the device was removed from the controller, run "unifi-agent forget"';
 
 	if (d.error) {
 		log(`reply: ${d.error}`);
@@ -241,6 +245,7 @@ export function step(st, profile) {
 	}
 
 	let next = handle(st, profile, msg);
+	wifi.enforce_blocked(profile, st.blocked);
 	save_state(st);
 
 	return next;

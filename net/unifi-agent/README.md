@@ -37,7 +37,7 @@ The agent speaks the UniFi inform protocol. Before a device is adopted it uses t
    /etc/init.d/unifi-agent start
    ```
 
-   An inform URL is not needed when the controller is on the same network. In that case the controller adopts the device over SSH (see [SSH adoption](#ssh-adoption)).
+   A controller on the device's own subnet adopts over SSH instead of using the inform URL. That needs `option ssh_adopt '1'` while the device is being adopted (see [SSH adoption](#ssh-adoption)).
 3. In the controller, adopt the device. It appears as pending, under the chosen model's name.
 4. Watch the log with `logread -e unifi-agent`. Every change the controller asks for is logged as a plan line before it is applied.
 
@@ -83,7 +83,9 @@ A model with more ports than the device works: the extra UniFi ports are simply 
 | Radios: channel, width, power, country, outdoor | `wifi-device` `channel`, `htmode`, `txpower`, `country`, `country3` |
 | WLANs: SSID, WPA2, WPA3, PMF, hidden, client isolation, MAC filter, VLAN, 802.11r/k/v | `wifi-iface` sections; a WLAN on a VLAN gets an unaddressed network over that VLAN |
 
-After a commit the agent reloads the network (and Wi-Fi), then checks that the controller can still be reached. If it can't within a minute, the previous configuration is restored. WLANs the controller no longer lists are disabled, never deleted.
+After a commit the agent reloads the network (and Wi-Fi), then checks that the controller can still be reached. If it can't within a minute, the previous configuration is restored. The backup is kept in memory: a reboot inside that minute keeps the new configuration. If the management VLAN is not among the controller's VLANs, the VLAN settings are left unchanged, so the device stays reachable. WLANs the controller no longer lists are disabled, never deleted.
+
+The agent works on its own copy of the UCI changes. Changes you staged with `uci set` but did not commit are never committed or reverted by it.
 
 Settings the agent does not carry out are not claimed in the device's capabilities, so the controller does not offer them. Settings it receives but does not apply are listed in `/tmp/unifi-agent/unhandled`. Examples: storm control, per-port STP edge or BPDU guard, 802.1X, port security, and on access points WLAN schedules, rate limits and the guest portal.
 
@@ -95,18 +97,21 @@ Access points also report radios, WLANs and clients with signal, rates and traff
 
 ## SSH adoption
 
-A controller adopts a device on its own network by logging in over SSH as `ubnt` with password `ubnt`, the factory login of a UniFi device, and running `set-adopt`. While the device is not adopted, the agent provides that:
+A controller adopts a device on its own subnet by logging in over SSH as `ubnt` with password `ubnt`, the factory login of a UniFi device, and running `set-adopt`. A device it reaches only through a router is adopted with the inform URL instead. With `option ssh_adopt '1'`, while the device is not adopted, the agent provides that login:
 
-- a `ubnt` account, whose login shell is `/usr/libexec/unifi-agent/ssh-adopt`. That handler records `set-adopt` and `set-inform` requests and does nothing else, so the account cannot open a shell, even on port 22.
-- a dropbear instance on `ssh_port` (default 2222, reported to the controller), which runs only that handler for every login and refuses root password logins.
+- a `ubnt` account, whose login shell is `/usr/libexec/unifi-agent/ssh-adopt`. That handler records `set-adopt` and `set-inform` requests and does nothing else.
+- a dropbear instance on `ssh_port` (default 2222, reported to the controller), which runs only that handler for every login, refuses root password logins, and allows no port forwarding (`-j -k`).
 
-The agent accepts a request only while it is pending, and only with an IP-literal inform URL and a 32-digit key. It removes the account once adopted.
+The agent accepts a request only while it is pending, and only with an IP-literal inform URL and a 32-digit key. It removes the account once adopted, when SSH adoption or the agent is turned off, when the service stops, and when the package is removed. An existing `ubnt` account that the agent did not create is never touched.
 
-This is the same exposure as a factory-default UniFi device: anyone on the network can adopt a pending device into their controller. Set `option ssh_adopt '0'` to turn it off and give the inform URL instead.
+It is off by default, and is best turned on only for the adoption itself, for two reasons:
+
+- Anyone on the network can adopt a pending device into their own controller, as with a factory-default UniFi device.
+- If the system dropbear on port 22 accepts passwords (OpenWrt's default), `ubnt`/`ubnt` can log in there too while the device is pending. The handler keeps that login from running commands, but dropbear has no per-user switch for TCP forwarding, so the login can still forward connections through the device.
 
 ## Removing a device
 
-Forgetting the device in the controller sends it back to pending; the applied configuration stays. `unifi-agent forget` does the same from the device side.
+After the device is forgotten in the controller, run `unifi-agent forget` on the device to make it pending again; the applied configuration stays. The agent does not do this on its own when the controller answers with the factory key: the inform protocol runs over plain HTTP, so such a reply is not proof that it comes from the controller. For the same reason, replies that are not encrypted are ignored, and once AES-GCM is in use, so are CBC replies.
 
 ## Credits
 

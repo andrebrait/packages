@@ -65,9 +65,14 @@ export function post(url, body, timeout) {
 		off += n;
 	}
 
-	let resp = '';
+	let resp = '', deadline = time() + 2 * timeout / 1000;
 
 	while (true) {
+		if (time() > deadline) {
+			s.close();
+			return { error: 'reply took too long' };
+		}
+
 		let chunk = s.recv(65536);
 
 		if (chunk == null) {
@@ -79,6 +84,12 @@ export function post(url, body, timeout) {
 			break;
 
 		resp += chunk;
+
+		// An inform reply is a few KB; never buffer an unbounded answer.
+		if (length(resp) > 1048576) {
+			s.close();
+			return { error: 'reply larger than 1 MiB' };
+		}
 	}
 
 	s.close();

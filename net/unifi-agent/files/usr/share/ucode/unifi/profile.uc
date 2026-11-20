@@ -85,6 +85,7 @@ export function parse_ethtool(text) {
 // What the hardware says about one local port.
 function probe_port(dev) {
 	let et = parse_ethtool(util.run([ 'ethtool', dev ]));
+	let eee = util.run([ 'ethtool', '--show-eee', dev ]);
 	let sfp = !!stat(`/sys/class/net/${dev}/of_node/sfp`) || et.fibre;
 	let max = et.speeds[-1] ?? 0;
 
@@ -99,7 +100,8 @@ function probe_port(dev) {
 		media: sfp ? ((max >= 10000) ? 'SFP+' : 'SFP') : 'GE',
 		speed_caps: et.speed_caps,
 		speeds: et.speeds,
-		max_speed: max
+		max_speed: max,
+		eee: !!eee && !match(eee, /not supported/)
 	};
 }
 
@@ -138,7 +140,7 @@ function local_radios(uci) {
 	let radios = [];
 
 	uci.foreach('wireless', 'wifi-device', (s) => {
-		let band = BANDS[s.band] ?? ((+s.channel > 14) ? 'na' : (s.hwmode == '11a' ? 'na' : 'ng'));
+		let band = BANDS[s.band] ?? ((+s.channel > 14 || s.hwmode == '11a') ? 'na' : 'ng');
 		push(radios, { device: s['.name'], radio: band, disabled: s.disabled == '1', channel: s.channel });
 	});
 
@@ -220,16 +222,6 @@ export function map_ports(mports, local) {
 	return sort(out, (a, b) => a.idx - b.idx);
 };
 
-function board_info() {
-	let b = util.run_json([ 'ubus', 'call', 'system', 'board' ]) ?? {};
-
-	return {
-		hostname: b.hostname ?? util.read('/proc/sys/kernel/hostname') ?? 'OpenWrt',
-		board: b.model ?? 'OpenWrt device',
-		release: b.release?.description ?? ''
-	};
-}
-
 // Loads the agent config and builds the profile. opts.probe = false skips
 // the hardware (for tests); opts.uci_dir points at another config tree.
 export function load(opts) {
@@ -245,9 +237,9 @@ export function load(opts) {
 
 	// Ports: from `config port` sections, else every bridge port.
 	uci.foreach('unifi-agent', 'port', (s) => {
-		if (s.device && s.enabled != '0')
+		if (s.device && util.bool(s.enabled, true))
 			push(ports, { dev: s.device, unifi: s.unifi ? +s.unifi : null, media: s.media,
-				poe: s.poe == '1', name: s.name });
+				poe: util.bool(s.poe, false), name: s.name });
 	});
 
 	if (!length(ports))
@@ -259,15 +251,16 @@ export function load(opts) {
 		p.speed_caps = hw.speed_caps;
 		p.speeds = hw.speeds;
 		p.max_speed = hw.max_speed;
+		p.eee = hw.eee;
 	}
 
 	// Radios: from `config radio` sections, else every wifi-device.
 	uci.foreach('unifi-agent', 'radio', (s) => {
-		if (s.device && s.enabled != '0')
+		if (s.device && util.bool(s.enabled, true))
 			push(radios, { device: s.device, radio: s.band });
 	});
 
-	if (!length(radios) && main.wireless != '0')
+	if (!length(radios) && util.bool(main.wireless, true))
 		radios = filter(local_radios(uci), (r) => !r.disabled);
 
 	let model = main.model ?? 'auto';
@@ -277,7 +270,8 @@ export function load(opts) {
 		model = candidates[0] ?? (length(radios) ? 'U7PG2' : 'USWED76');
 
 	let entry = models[model] ?? {};
-	let mapped = map_ports(model_ports(entry), ports);
+	let mports = model_ports(entry);
+	let mapped = map_ports(mports, ports);
 
 	// Radios take the model's radio rows of the same band, in order.
 	let mradios = [ ...(entry.radios ?? []) ], rmapped = [];
@@ -293,9 +287,9 @@ export function load(opts) {
 	}
 
 	return {
-		enabled: main.enabled == '1',
+		enabled: util.bool(main.enabled, false),
 		inform_url: main.inform_url,
-		apply: main.apply != '0',
+		apply: util.bool(main.apply, true),
 		interval: +(main.interval ?? 10),
 		bridge,
 		mgmt_interface: iface,
@@ -303,17 +297,16 @@ export function load(opts) {
 		model_display: entry.name ?? model,
 		type: entry.type ?? 'usw',
 		version: main.version ?? entry.version ?? '7.4.1.16850',
-		model_ports: model_ports(entry),
+		model_ports: mports,
 		ports: mapped,
 		unmapped: filter(ports, (p) => !(p.dev in map(mapped, (m) => m.dev))),
 		radios: rmapped,
 		unmapped_radios: filter(radios, (r) => !(r.device in map(rmapped, (m) => m.device))),
 		candidates: slice(candidates, 0, 5),
-		ssh_port: (main.ssh_adopt != '0') ? +(main.ssh_port ?? 2222) : null,
+		ssh_port: util.bool(main.ssh_adopt, false) ? +(main.ssh_port ?? 2222) : null,
 		locate_led: main.locate_led,
 		hostname: main.hostname,
 		mac: main.mac
 	};
 };
 
-export { board_info };

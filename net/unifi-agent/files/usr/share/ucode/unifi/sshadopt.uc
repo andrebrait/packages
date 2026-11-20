@@ -3,7 +3,7 @@
 // ubnt, as on a factory-default UniFi device) whose only shell is
 // /usr/libexec/unifi-agent/ssh-adopt. Requests it records are checked here.
 
-import { readfile, lsdir, unlink, stat } from 'fs';
+import { readfile, lsdir, unlink, stat, chmod } from 'fs';
 import * as util from 'unifi.util';
 
 const SPOOL = '/tmp/unifi-agent/ssh';
@@ -29,12 +29,24 @@ function edit(path, line, present) {
 	if (out == text)
 		return false;
 
-	return util.write_file(path, out, (path == '/etc/shadow') ? 0o600 : 0o644);
+	return util.write_file(path, out, (substr(path, -7) == '/shadow') ? 0o600 : 0o644);
+}
+
+// A ubnt account this agent did not create is left alone.
+function foreign(root) {
+	for (let l in split(readfile(`${root}/etc/passwd`) ?? '', '\n'))
+		if (substr(l, 0, length(USER) + 1) == `${USER}:` && substr(l, -length(SHELL)) != SHELL)
+			return true;
+
+	return false;
 }
 
 // Adds or removes the account. Returns true when something changed.
 export function account(present, root) {
 	root ??= '';
+
+	if (foreign(root))
+		return false;
 
 	let changed = edit(`${root}/etc/passwd`, `${USER}:x:${UID}:${UID}:UniFi adoption:/var/empty:${SHELL}`, present);
 	changed = edit(`${root}/etc/shadow`, `${USER}:${HASH}:0:0:99999:7:::`, present) || changed;
@@ -45,10 +57,12 @@ export function account(present, root) {
 		if (index(shells, SHELL) < 0)
 			util.write_file(`${root}/etc/shells`, shells + SHELL + '\n', 0o644);
 
-		if (!stat(SPOOL)) {
-			util.mkdir_p(SPOOL);
-			system([ 'chmod', '1733', SPOOL ]);
-		}
+		// The handler runs as ubnt: it must reach the spool and write to it.
+		let spool = root + SPOOL;
+
+		util.mkdir_p(spool, 0o755);
+		chmod(substr(spool, 0, rindex(spool, '/')), 0o755);
+		chmod(spool, 0o1733);
 	}
 
 	return changed;

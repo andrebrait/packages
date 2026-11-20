@@ -9,9 +9,12 @@ start_service() {
 
 	config_load unifi-agent
 	config_get_bool enabled main enabled 0
-	config_get_bool ssh_adopt main ssh_adopt 1
+	config_get_bool ssh_adopt main ssh_adopt 0
 	config_get ssh_port main ssh_port 2222
-	[ "$enabled" = 1 ] || return 0
+	[ "$enabled" = 1 ] || {
+		/usr/sbin/unifi-agent cleanup
+		return 0
+	}
 
 	procd_open_instance agent
 	procd_set_param command /usr/sbin/unifi-agent run
@@ -22,13 +25,16 @@ start_service() {
 	# SSH adoption endpoint: every login runs only the adoption handler, and
 	# the ubnt account it is meant for exists only while the device is pending.
 	[ "$ssh_adopt" = 1 ] && [ -x /usr/sbin/dropbear ] || return 0
-	mkdir -p /tmp/unifi-agent/ssh
-	chmod 1733 /tmp/unifi-agent/ssh
 	procd_open_instance ssh
-	procd_set_param command /usr/sbin/dropbear -F -R -g -p "$ssh_port" \
+	procd_set_param command /usr/sbin/dropbear -F -R -g -j -k -p "$ssh_port" \
 		-P /var/run/unifi-agent-dropbear.pid -c /usr/libexec/unifi-agent/ssh-adopt
 	procd_set_param respawn 3600 5 0
 	procd_close_instance
+}
+
+stop_service() {
+	# Never leave the adoption account behind.
+	/usr/sbin/unifi-agent cleanup
 }
 
 service_triggers() {
