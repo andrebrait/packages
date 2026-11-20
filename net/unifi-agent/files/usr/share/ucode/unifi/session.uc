@@ -28,7 +28,7 @@ export function load_state() {
 function save_state(st) {
 	let keep = {};
 
-	for (let k in [ 'authkey', 'use_gcm', 'cfgversion', 'inform_url', 'mgmt_url', 'blocked' ])
+	for (let k in [ 'authkey', 'use_gcm', 'cfgversion', 'inform_url', 'mgmt_url', 'blocked', 'version' ])
 		if (st[k] != null)
 			keep[k] = st[k];
 
@@ -167,8 +167,13 @@ export function handle(st, profile, msg) {
 	}
 
 	if (t == 'upgrade') {
-		// Ubiquiti firmware would brick this device.
+		// Ubiquiti firmware would brick this device. Report the offered
+		// version from now on, so the controller stops offering it.
 		log(`refusing firmware upgrade to ${msg.version}`);
+
+		if (match(msg.version ?? '', /^[0-9]+(\.[0-9]+){1,4}$/))
+			st.version = msg.version;
+
 		return profile.interval;
 	}
 
