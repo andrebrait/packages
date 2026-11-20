@@ -52,7 +52,8 @@ export function forget(st) {
 };
 
 const KEY_RE = /^[0-9a-fA-F]{32}$/;
-const URL_RE = /^http:\/\/[0-9]{1,3}(\.[0-9]{1,3}){3}(:[0-9]{1,5})?\/inform$/;
+// No leading zeros: the resolver would read such an octet as octal.
+const URL_RE = /^http:\/\/(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}(:[1-9][0-9]{0,4})?\/inform$/;
 
 function handle_mgmt(st, text) {
 	let m = util.parse_kv(text);
