@@ -1,0 +1,30 @@
+# UniFi controller agent. See `unifi-agent show` for what the controller
+# will see, and `unifi-agent models` for the models it can be shown as.
+
+config agent 'main'
+	option enabled '0'
+	# The controller's inform address; an IP address, not a host name.
+	option inform_url ''
+	# A model from `unifi-agent models`, or auto to pick from the hardware.
+	option model 'auto'
+	# 0: translate and log the controller's settings, change nothing.
+	option apply '1'
+	# The bridge whose ports the controller manages.
+	option bridge 'br-lan'
+	# The interface the device is managed on.
+	option interface 'lan'
+	option interval '10'
+
+# Map UniFi ports to local ports. Without port sections every port of the
+# bridge is reported, copper before fibre, in the order of the model.
+#config port
+#	option unifi '1'	# UniFi port number
+#	option device 'lan1'
+#	option media 'GE'	# GE, SFP or SFP+; detected when unset
+#	option poe '0'		# 1: report PoE and apply it through netifd's pse option
+
+# Map UniFi radios to wifi-device sections. Without radio sections every
+# enabled wifi-device is reported.
+#config radio
+#	option device 'radio0'
+#	option band 'ng'	# ng (2.4 GHz), na (5 GHz), 6e (6 GHz)
