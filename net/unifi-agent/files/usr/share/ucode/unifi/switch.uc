@@ -23,7 +23,7 @@
 // Anything else under switch.* is reported back as unhandled.
 
 import { stat, readfile } from 'fs';
-import { setopt, matches_any, bridge_members } from 'unifi.util';
+import { setopt, matches_any, bridge_members, uci_list } from 'unifi.util';
 
 const HANDLED = [
 	/^switch\.vlan\.[0-9]+\.(id|mode|status|igmp_snooping|igmp_fastleave|igmp_querier_status)$/,
@@ -276,6 +276,24 @@ export function plan(cfg, profile, c) {
 	// VLANs: the agent owns every bridge-vlan of the bridge.
 	let want = {};
 
+	// Existing bridge-vlan memberships of ports the controller does not manage.
+	let unmanaged_vlans = {}, unmanaged_seen = {};
+
+	c.foreach('network', 'bridge-vlan', (s) => {
+		if (s.device != bridge)
+			return;
+
+		for (let e in uci_list(s.ports)) {
+			let d = split(e, ':')[0];
+
+			if (!managed[d] && !own_bonds[d]) {
+				unmanaged_vlans[+s.vlan] ??= [];
+				push(unmanaged_vlans[+s.vlan], e);
+				unmanaged_seen[d] = true;
+			}
+		}
+	});
+
 	for (let vid, m in members) {
 		let list = [];
 
@@ -287,10 +305,15 @@ export function plan(cfg, profile, c) {
 				push(list, entry);
 		}
 
-		// Unmanaged bridge ports keep untagged membership of the management VLAN.
+		// Ports the controller does not manage keep the VLAN memberships they
+		// had; one that had none is untagged on the management VLAN.
+		for (let e in unmanaged_vlans[vid] ?? [])
+			if (!(e in list))
+				push(list, e);
+
 		if (vid == mvid)
 			for (let d in brports)
-				if (!managed[d] && !own_bonds[d])
+				if (!managed[d] && !own_bonds[d] && !unmanaged_seen[d])
 					push(list, `${d}:u*`);
 
 		want[vid] = sort(list);
