@@ -24,6 +24,7 @@
 
 import { stat, readfile } from 'fs';
 import { setopt, matches_any, bridge_members, uci_list } from 'unifi.util';
+import { is_fiber } from 'unifi.profile';
 
 const HANDLED = [
 	/^switch\.vlan\.[0-9]+\.(id|mode|status|igmp_snooping|igmp_fastleave|igmp_querier_status)$/,
@@ -371,7 +372,11 @@ export function plan(cfg, profile, c) {
 		// SFP/SFP+ ports: 10GBASE-R has no autonegotiation, so a pause setting
 		// is forced, and setting one left an LG510S SFP+ port in 1000base-x
 		// with no link after a reboot. Flow control and EEE stay unset there.
-		let fiber = !!match(p.model_media ?? p.media ?? '', /^Q?SFP/);
+		// The local port's own media decides, whatever UniFi slot it maps to.
+		let fiber = is_fiber(p.media) || is_fiber(p.model_media);
+
+		if (fiber && (sp.flowctrl == 'enabled' || sp.eee == 'enabled'))
+			push(notes, `port ${p.idx} (${p.dev}): flow control and EEE are not set on SFP ports`);
 
 		for (let vid, m in members)
 			if (m[p.idx] && fastleave[vid])

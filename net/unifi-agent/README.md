@@ -14,7 +14,7 @@ The agent speaks the UniFi inform protocol. Before a device is adopted it uses t
 
    ```
    UniFi Switch 6 XG PoE (US6XG150), switch
-   controller: not set   not adopted   apply: on
+   controller: not set   not adopted   apply: log only
 
                ┌──────┬──────┬──────┬──────┐ ┌──────┬──────┐
    UniFi port  │ 1    │ 2    │ 3    │ 4    │ │ 5    │ 6    │
@@ -32,6 +32,7 @@ The agent speaks the UniFi inform protocol. Before a device is adopted it uses t
    ```sh
    uci set unifi-agent.main.inform_url='http://192.168.1.2:8080/inform'
    uci set unifi-agent.main.enabled='1'
+   uci set unifi-agent.main.apply='1'    # leave '0' to only log at first
    uci commit unifi-agent
    /etc/init.d/unifi-agent enable
    /etc/init.d/unifi-agent start
@@ -41,7 +42,7 @@ The agent speaks the UniFi inform protocol. Before a device is adopted it uses t
 3. In the controller, adopt the device. It appears as pending, under the chosen model's name.
 4. Watch the log with `logread -e unifi-agent`. Every change the controller asks for is logged as a plan line before it is applied.
 
-To stage a rollout, set `option apply '0'`: the agent then only logs what it would change. `unifi-agent plan <file>` translates a saved `system_cfg` without changing anything. The last one received is kept in `/tmp/unifi-agent/system_cfg`.
+Out of the box, and whenever `option apply` is unset, the agent only logs what it would change; set `option apply '1'` to apply. (Before release 3 an unset `apply` meant on: a hand-written config without it now only logs.) `unifi-agent plan <file>` translates a saved `system_cfg` without changing anything. The last one received is kept in `/tmp/unifi-agent/system_cfg`.
 
 LuCI users get the same front panel and every setting under Services → UniFi controller (`luci-app-unifi-agent`).
 

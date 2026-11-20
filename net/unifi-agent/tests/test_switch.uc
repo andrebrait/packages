@@ -73,7 +73,7 @@ t.ok(!('eth9:u*' in cx.get('network', 'unifi_vlan1', 'ports')), 'unmanaged trunk
 
 // SFP ports never get flow control or EEE, and an existing pause is removed.
 system(`rm -rf /tmp/uci-p && mkdir -p /tmp/uci-p/save && cp '${DIR}'/lg510s-vlanonly/* /tmp/uci-p/`);
-let cp0 = cursor('/tmp/uci-p');
+let cp0 = cursor('/tmp/uci-p', '/tmp/uci-p/seed');
 cp0.set('network', 'old5', 'device');
 cp0.set('network', 'old5', 'name', 'lan5');
 cp0.set('network', 'old5', 'pause', '1');
@@ -85,5 +85,11 @@ t.eq(cp.get('network', 'old5', 'pause'), null, 'pause removed from an SFP port')
 t.eq(cp.get('network', 'unifi_lan6', 'pause'), null, 'no pause set on an SFP port');
 t.eq(cp.get('network', 'old5', 'eee'), null, 'no EEE on an SFP port');
 t.eq(cp.get('network', 'unifi_lan1', 'pause'), '1', 'copper still gets flow control');
+
+// An SFP cage mapped onto a copper UniFi slot is still treated as SFP.
+let cq = cursor('/tmp/uci-p', '/tmp/uci-p/save2');
+sw.plan(util.parse_kv('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\nswitch.port.1.flowctrl=enabled\n'),
+	{ ...profile, bridge: 'switch', ports: [ { idx: 1, dev: 'lan5', media: 'SFP+', model_media: 'GE', speeds: [] } ] }, cq);
+t.eq(cq.get('network', 'old5', 'pause'), null, 'local media decides');
 
 t.done();
