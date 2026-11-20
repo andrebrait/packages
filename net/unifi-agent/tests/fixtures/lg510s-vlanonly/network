@@ -1,0 +1,12 @@
+config device 'switch'
+	option name 'switch'
+	option type 'bridge'
+
+config bridge-vlan 'lan_vlan'
+	option device 'switch'
+	option vlan '1'
+	option ports 'lan1 lan2 lan3 lan4 lan5 lan6'
+
+config interface 'lan'
+	option device 'switch.1'
+	option proto 'static'

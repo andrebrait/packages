@@ -219,14 +219,18 @@ function mac_acl(cfg, devname) {
 // unifi-openwrt does on a plain AP. On a VLAN-filtering bridge the VLAN
 // device br-lan.<vid> is used instead.
 function plan_vlans(c, profile, vids, notes, switch_keys) {
-	let bridge = profile.bridge, filtering = false, uplink = null, brports = [];
+	let bridge = profile.bridge, filtering = false;
+	let brports = util.bridge_members(c, bridge), uplink = brports[0];
 
+	// netifd filters VLANs on a bridge with bridge-vlan sections, too.
 	c.foreach('network', 'device', (s) => {
-		if (s.type == 'bridge' && s.name == bridge) {
-			filtering = s.vlan_filtering == '1';
-			uplink = s.ports?.[0];
-			brports = s.ports ?? [];
-		}
+		if (s.type == 'bridge' && s.name == bridge && s.vlan_filtering == '1')
+			filtering = true;
+	});
+
+	c.foreach('network', 'bridge-vlan', (s) => {
+		if (s.device == bridge && !match(s['.name'], /^unifi_wvlan[0-9]+$/))
+			filtering = true;
 	});
 
 	// On a filtering bridge the VLAN needs bridge membership. The switch

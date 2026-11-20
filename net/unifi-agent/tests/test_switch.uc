@@ -49,4 +49,26 @@ t.eq(c2.changes('network'), {}, 'idempotent');
 t.ok(sw.handled('switch.vlan.2.port.3.mode'), 'handled matrix');
 t.ok(!sw.handled('switch.port.1.stp.edge'), 'stp edge unhandled');
 
+// The same bridge through the switch translation: every member stays.
+system(`rm -rf /tmp/uci-v && mkdir -p /tmp/uci-v/save && cp '${DIR}'/lg510s-vlanonly/* /tmp/uci-v/`);
+let cv = cursor('/tmp/uci-v', '/tmp/uci-v/save');
+sw.plan(util.parse_kv('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\n'),
+	{ ...profile, bridge: 'switch' }, cv);
+t.eq(cv.get('network', 'switch', 'ports'), [ 'lan1', 'lan2', 'lan3', 'lan4', 'lan5', 'lan6' ], 'bridge-vlan members kept in the bridge');
+t.eq(cv.get('network', 'unifi_vlan1', 'ports'), [ 'lan1:u*', 'lan2:u*', 'lan3:u*', 'lan4:u*', 'lan5:u*', 'lan6:u*' ], 'vlan 1 on every member');
+
+// An unmanaged trunk keeps its tagged VLAN and gets no untagged one.
+system(`rm -rf /tmp/uci-x && mkdir -p /tmp/uci-x/save && cp '${DIR}'/lg510s-vlanonly/* /tmp/uci-x/`);
+let cx = cursor('/tmp/uci-x');
+cx.set('network', 'v10', 'bridge-vlan');
+cx.set('network', 'v10', 'device', 'switch');
+cx.set('network', 'v10', 'vlan', '10');
+cx.set('network', 'v10', 'ports', 'lan1:u* eth9:t');
+cx.commit('network');
+cx = cursor('/tmp/uci-x', '/tmp/uci-x/save');
+sw.plan(util.parse_kv('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\nswitch.vlan.2.id=10\nswitch.vlan.2.mode=tagged\nswitch.vlan.2.status=enabled\n'),
+	{ ...profile, bridge: 'switch' }, cx);
+t.ok('eth9:t' in cx.get('network', 'unifi_vlan10', 'ports'), 'unmanaged trunk keeps VLAN 10 tagged');
+t.ok(!('eth9:u*' in cx.get('network', 'unifi_vlan1', 'ports')), 'unmanaged trunk not made untagged');
+
 t.done();
