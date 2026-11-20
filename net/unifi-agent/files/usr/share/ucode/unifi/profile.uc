@@ -109,13 +109,11 @@ function probe_port(dev) {
 // A bond the agent created stands for its member ports, so a LAG does not
 // change the mapping found at the next start.
 function bridge_ports(uci, bridge) {
-	let ports = [], bonds = {};
+	let ports = util.bridge_members(uci, bridge), bonds = {};
 
 	uci.foreach('network', 'device', (s) => {
-		if (s.type == 'bridge' && s.name == bridge)
-			ports = [ ...(s.ports ?? []) ];
-		else if (s.type == 'bonding' && match(s['.name'], /^unifi_lag[0-9]+$/))
-			bonds[s.name] = s.ports ?? [];
+		if (s.type == 'bonding' && match(s['.name'], /^unifi_lag[0-9]+$/))
+			bonds[s.name] = util.uci_list(s.ports);
 	});
 
 	let out = [];

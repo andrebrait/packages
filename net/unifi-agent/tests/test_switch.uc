@@ -49,4 +49,12 @@ t.eq(c2.changes('network'), {}, 'idempotent');
 t.ok(sw.handled('switch.vlan.2.port.3.mode'), 'handled matrix');
 t.ok(!sw.handled('switch.port.1.stp.edge'), 'stp edge unhandled');
 
+// The same bridge through the switch translation: every member stays.
+system(`rm -rf /tmp/uci-v && mkdir -p /tmp/uci-v && cp '${DIR}'/lg510s-vlanonly/* /tmp/uci-v/`);
+let cv = cursor('/tmp/uci-v', '/tmp/uci-v/save');
+sw.plan(util.parse_kv('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\n'),
+	{ ...profile, bridge: 'switch' }, cv);
+t.eq(cv.get('network', 'switch', 'ports'), [ 'lan1', 'lan2', 'lan3', 'lan4', 'lan5', 'lan6' ], 'bridge-vlan members kept in the bridge');
+t.eq(cv.get('network', 'unifi_vlan1', 'ports'), [ 'lan1:u*', 'lan2:u*', 'lan3:u*', 'lan4:u*', 'lan5:u*', 'lan6:u*' ], 'vlan 1 on every member');
+
 t.done();

@@ -52,4 +52,9 @@ t.eq(et.speeds, [ 100, 1000, 2500, 5000, 10000 ], 'speeds');
 let lg = profile.load({ uci_dir: DIR + '/lg510s', models, probe: lg510s });
 t.eq([ lg.bridge, lg.model, length(lg.ports) ], [ 'switch', 'US6XG150', 6 ], 'bridge found from lan device');
 
+// A bridge whose ports come only from its bridge-vlan, written as one
+// space-separated option (the office and meterkast LG510S units).
+let vo = profile.load({ uci_dir: DIR + '/lg510s-vlanonly', models, probe: lg510s });
+t.eq([ vo.bridge, vo.model, map(vo.ports, (x) => x.dev) ], [ 'switch', 'US6XG150', [ 'lan1', 'lan2', 'lan3', 'lan4', 'lan5', 'lan6' ] ], 'ports from bridge-vlan only');
+
 t.done();

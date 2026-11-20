@@ -23,7 +23,7 @@
 // Anything else under switch.* is reported back as unhandled.
 
 import { stat, readfile } from 'fs';
-import { setopt, matches_any } from 'unifi.util';
+import { setopt, matches_any, bridge_members } from 'unifi.util';
 
 const HANDLED = [
 	/^switch\.vlan\.[0-9]+\.(id|mode|status|igmp_snooping|igmp_fastleave|igmp_querier_status)$/,
@@ -185,7 +185,7 @@ export function plan(cfg, profile, c) {
 	let mvid = +(cfg['switch.managementvlan'] ?? 1);
 	let members = membership(sw, length(profile.model_ports));
 	let vlan_ok = members[mvid] != null;
-	let managed = {}, brports = c.get('network', brsec, 'ports') ?? [];
+	let managed = {}, brports = bridge_members(c, bridge);
 
 	for (let p in profile.ports)
 		managed[p.dev] = p.idx;

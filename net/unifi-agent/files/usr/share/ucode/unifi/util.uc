@@ -80,6 +80,34 @@ export function inform_url_ok(url) {
 	return m[6] == null || +m[6] <= 65535;
 };
 
+// A UCI list option as an array: netifd also accepts one option holding
+// space-separated values.
+export function uci_list(v) {
+	if (type(v) == 'array')
+		return v;
+
+	return filter(split(trim(v ?? ''), /[ \t]+/), length);
+};
+
+// The ports of a bridge: its own list plus the members of its bridge-vlan
+// sections (netifd adds those to the bridge), without the ":t"/":u*" flags.
+export function bridge_members(uci, bridge) {
+	let ports = [];
+
+	uci.foreach('network', 'device', (s) => {
+		if (s.type == 'bridge' && s.name == bridge)
+			ports = [ ...ports, ...uci_list(s.ports) ];
+	});
+
+	uci.foreach('network', 'bridge-vlan', (s) => {
+		if (s.device == bridge)
+			for (let p in uci_list(s.ports))
+				push(ports, split(p, ':')[0]);
+	});
+
+	return uniq(ports);
+};
+
 // A UCI boolean, read the way config_get_bool does.
 export function bool(v, dflt) {
 	if (v in [ '1', 'on', 'true', 'yes', 'enabled' ])
