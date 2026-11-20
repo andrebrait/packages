@@ -7,7 +7,7 @@ import { cursor } from 'uci';
 import { readfile } from 'fs';
 
 const DIR = sourcepath(0, true) + '/fixtures';
-system(`rm -rf /tmp/uci-t && mkdir -p /tmp/uci-t/save && cp ${DIR}/config/* /tmp/uci-t/`);
+system(`rm -rf /tmp/uci-t && mkdir -p /tmp/uci-t/save && cp '${DIR}'/config/* /tmp/uci-t/`);
 
 let profile = {
 	bridge: 'br-lan', mgmt_interface: 'lan',

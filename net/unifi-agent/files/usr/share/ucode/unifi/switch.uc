@@ -190,6 +190,17 @@ export function plan(cfg, profile, c) {
 	for (let p in profile.ports)
 		managed[p.dev] = p.idx;
 
+	// The bonds this agent created, by device name; other bonds are the user's.
+	let own_bonds = {};
+
+	c.foreach('network', 'device', (s) => {
+		if (s.type == 'bonding' && match(s['.name'], /^unifi_lag[0-9]+$/))
+			own_bonds[s.name] = true;
+	});
+
+	for (let l in keys(lags))
+		own_bonds[`lag${l}`] = true;
+
 	if (vlan_ok) {
 		let bonds = {};
 
@@ -224,7 +235,7 @@ export function plan(cfg, profile, c) {
 		brports = [];
 
 		for (let d in old)
-			if (!(d in brports) && !(managed[d] && lag_of[managed[d]]) && !match(d, /^lag[0-9]+$/))
+			if (!(d in brports) && !(managed[d] && lag_of[managed[d]]) && !own_bonds[d])
 				push(brports, d);
 
 		for (let p in profile.ports)
@@ -279,7 +290,7 @@ export function plan(cfg, profile, c) {
 		// Unmanaged bridge ports keep untagged membership of the management VLAN.
 		if (vid == mvid)
 			for (let d in brports)
-				if (!managed[d] && !match(d, /^lag[0-9]+$/))
+				if (!managed[d] && !own_bonds[d])
 					push(list, `${d}:u*`);
 
 		want[vid] = sort(list);

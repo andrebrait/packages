@@ -7,6 +7,8 @@ import * as ssh from 'unifi.sshadopt';
 import * as session from 'unifi.session';
 import * as util from 'unifi.util';
 import * as apply from 'unifi.apply';
+import * as aes from 'unifi.aes';
+import * as profile_mod from 'unifi.profile';
 import * as struct from 'struct';
 import * as zlib from 'zlib';
 import { cursor } from 'uci';
@@ -52,7 +54,7 @@ t.eq(wifi.parse_blocked('aa:bb:cc:dd:ee:01, junk ,AA:BB:CC:DD:EE:02'), [ 'aa:bb:
 
 // Switch: a management VLAN missing from the VLAN list leaves VLANs alone;
 // a stale bond is removed; fast leave reaches the port.
-system(`rm -rf /tmp/uci-r && mkdir -p /tmp/uci-r/save && cp ${DIR}/lg510s/* /tmp/uci-r/`);
+system(`rm -rf /tmp/uci-r && mkdir -p /tmp/uci-r/save && cp '${DIR}'/lg510s/* /tmp/uci-r/`);
 let profile = {
 	bridge: 'switch', mgmt_interface: 'lan',
 	model_ports: map([1,2,3,4,5,6], (i) => ({ idx: i })),
@@ -108,5 +110,40 @@ system('printf "root:x:0:0::/root:/bin/ash\\n" > /tmp/ssh-r/etc/passwd && mkdir 
 ssh.account(true, '/tmp/ssh-r');
 t.eq(sprintf('%o', stat('/tmp/ssh-r/tmp/unifi-agent').mode & 0o7777), '755', 'spool parent opened up');
 t.eq(sprintf('%o', stat('/tmp/ssh-r/tmp/unifi-agent/ssh').mode & 0o7777), '1733', 'spool mode');
+
+// CodeRabbit round: a zlib error is a decode error, not an exception.
+let iv0 = hexdec('000102030405060708090a0b0c0d0e0f');
+let ct = aes.cbc_encrypt(hexdec(K), iv0, 'this is not a zlib stream');
+let notz = struct.pack('>II6sH16sII', 0x544E4255, 0, hexdec('002722e00054'), 0x03, iv0, 1, length(ct)) + ct;
+t.eq(inform.decode(notz, K).error, 'inflate failed', 'zlib error is a decode error');
+
+// A LAG the agent made still maps its member ports after a restart, and a
+// user bond named lagN stays in the bridge.
+system(`rm -rf /tmp/uci-b && mkdir -p /tmp/uci-b && cp '${DIR}'/lg510s/* /tmp/uci-b/`);
+let cb = cursor('/tmp/uci-b');
+cb.set('network', 'unifi_lag1', 'device');
+cb.set('network', 'unifi_lag1', 'type', 'bonding');
+cb.set('network', 'unifi_lag1', 'name', 'lag1');
+cb.set('network', 'unifi_lag1', 'ports', [ 'lan3', 'lan4' ]);
+cb.set('network', 'userbond', 'device');
+cb.set('network', 'userbond', 'type', 'bonding');
+cb.set('network', 'userbond', 'name', 'lag9');
+cb.set('network', cb.get_first('network', 'device'), 'ports', [ 'lan1', 'lan2', 'lan5', 'lan6', 'lag1', 'lag9' ]);
+cb.commit('network');
+let models = profile_mod.load_models(DIR + '/../../files/usr/share/unifi-agent/models.json');
+let gp = profile_mod.load({ uci_dir: '/tmp/uci-b', models, probe: (d) => ({ media: (d == 'lan5' || d == 'lan6') ? 'SFP+' : 'GE', speeds: [], speed_caps: 0, max_speed: 0 }) });
+t.ok('lan3' in map(gp.ports, (x) => x.dev) && 'lan4' in map(gp.ports, (x) => x.dev), 'LAG members still discovered');
+let cb2 = cursor('/tmp/uci-b', '/tmp/uci-b/save');
+sw.plan(util.parse_kv(lagcfg), { ...gp, bridge: 'switch', mgmt_interface: 'lan' }, cb2);
+t.ok('lag9' in cb2.get('network', cb2.get_first('network', 'device'), 'ports'), 'user bond kept in the bridge');
+
+// Disabled sections switch discovery off.
+cb = cursor('/tmp/uci-b');
+cb.set('unifi-agent', 'p1', 'port');
+cb.set('unifi-agent', 'p1', 'device', 'lan1');
+cb.set('unifi-agent', 'p1', 'enabled', '0');
+cb.commit('unifi-agent');
+gp = profile_mod.load({ uci_dir: '/tmp/uci-b', models, probe: (d) => ({ media: 'GE', speeds: [], speed_caps: 0, max_speed: 0 }) });
+t.eq(length(gp.ports), 0, 'all port sections disabled: nothing discovered');
 
 t.done();

@@ -91,8 +91,14 @@ export function decode(body, keyhex, require_gcm) {
 	if (flags & FLAG_SNAPPY)
 		return { error: 'snappy payload not supported' };
 
-	if (flags & FLAG_ZLIB)
-		data = zlib.inflate(data);
+	if (flags & FLAG_ZLIB) {
+		try {
+			data = zlib.inflate(data);
+		}
+		catch (e) {
+			data = null;
+		}
+	}
 
 	if (data == null)
 		return { error: 'inflate failed' };

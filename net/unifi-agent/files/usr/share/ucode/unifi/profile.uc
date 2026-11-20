@@ -106,15 +106,25 @@ function probe_port(dev) {
 }
 
 // Bridge ports from the network config, in natural order.
+// A bond the agent created stands for its member ports, so a LAG does not
+// change the mapping found at the next start.
 function bridge_ports(uci, bridge) {
-	let ports = [];
+	let ports = [], bonds = {};
 
 	uci.foreach('network', 'device', (s) => {
 		if (s.type == 'bridge' && s.name == bridge)
 			ports = [ ...(s.ports ?? []) ];
+		else if (s.type == 'bonding' && match(s['.name'], /^unifi_lag[0-9]+$/))
+			bonds[s.name] = s.ports ?? [];
 	});
 
-	return sort(ports, util.natcmp);
+	let out = [];
+
+	for (let d in ports)
+		for (let m in (bonds[d] ?? [ d ]))
+			push(out, m);
+
+	return sort(uniq(out), util.natcmp);
 }
 
 // The bridge behind the management interface (lan on br-lan, or on
@@ -236,13 +246,18 @@ export function load(opts) {
 	let ports = [], radios = [];
 
 	// Ports: from `config port` sections, else every bridge port.
+	let port_sections = 0, radio_sections = 0;
+
 	uci.foreach('unifi-agent', 'port', (s) => {
+		port_sections++;
+
 		if (s.device && util.bool(s.enabled, true))
 			push(ports, { dev: s.device, unifi: s.unifi ? +s.unifi : null, media: s.media,
 				poe: util.bool(s.poe, false), name: s.name });
 	});
 
-	if (!length(ports))
+	// Discovery only without any port section; disabled ones count.
+	if (!port_sections)
 		ports = map(bridge_ports(uci, bridge), (d) => ({ dev: d }));
 
 	for (let p in ports) {
@@ -256,12 +271,16 @@ export function load(opts) {
 
 	// Radios: from `config radio` sections, else every wifi-device.
 	uci.foreach('unifi-agent', 'radio', (s) => {
+		radio_sections++;
+
 		if (s.device && util.bool(s.enabled, true))
 			push(radios, { device: s.device, radio: s.band });
 	});
 
-	if (!length(radios) && util.bool(main.wireless, true))
-		radios = filter(local_radios(uci), (r) => !r.disabled);
+	// Every radio, disabled ones too: the controller may have turned it off
+	// and must be able to turn it on again.
+	if (!radio_sections && util.bool(main.wireless, true))
+		radios = local_radios(uci);
 
 	let model = main.model ?? 'auto';
 	let candidates = suggest(models, ports, radios);

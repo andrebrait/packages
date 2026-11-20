@@ -43,9 +43,13 @@ export function post(url, body, timeout) {
 	if (!s)
 		return { error: `connect ${u.host}:${u.port}: ${socket.error()}` };
 
-	let tv = { tv_sec: timeout / 1000, tv_usec: (timeout % 1000) * 1000 };
-	s.setopt(socket.SOL_SOCKET, socket.SO_RCVTIMEO, tv);
-	s.setopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, tv);
+	let tv = { sec: int(timeout / 1000), usec: (timeout % 1000) * 1000 };
+
+	if (!s.setopt(socket.SOL_SOCKET, socket.SO_RCVTIMEO, tv) ||
+	    !s.setopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, tv)) {
+		s.close();
+		return { error: `socket timeout: ${socket.error()}` };
+	}
 
 	let req = `POST ${u.path} HTTP/1.1\r\n` +
 		`Host: ${u.host}:${u.port}\r\n` +

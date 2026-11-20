@@ -218,15 +218,57 @@ function mac_acl(cfg, devname) {
 // VLAN networks for WLANs: an unaddressed bridge over <uplink>.<vid>, as
 // unifi-openwrt does on a plain AP. On a VLAN-filtering bridge the VLAN
 // device br-lan.<vid> is used instead.
-function plan_vlans(c, profile, vids, notes) {
-	let bridge = profile.bridge, filtering = false, uplink = null;
+function plan_vlans(c, profile, vids, notes, switch_keys) {
+	let bridge = profile.bridge, filtering = false, uplink = null, brports = [];
 
 	c.foreach('network', 'device', (s) => {
 		if (s.type == 'bridge' && s.name == bridge) {
 			filtering = s.vlan_filtering == '1';
 			uplink = s.ports?.[0];
+			brports = s.ports ?? [];
 		}
 	});
+
+	// On a filtering bridge the VLAN needs bridge membership. The switch
+	// translation owns it when the controller sends switch keys; otherwise
+	// the bridge's ports carry the VLAN tagged.
+	let have_vid = {};
+
+	c.foreach('network', 'bridge-vlan', (s) => {
+		if (s.device == bridge && !match(s['.name'], /^unifi_wvlan[0-9]+$/))
+			have_vid[+s.vlan] = true;
+	});
+
+	let want_w = {};
+
+	if (filtering && !switch_keys) {
+		for (let vid in vids) {
+			if (have_vid[vid])
+				continue;
+
+			let sec = `unifi_wvlan${vid}`;
+
+			want_w[sec] = true;
+
+			if (c.get('network', sec) == null) {
+				c.set('network', sec, 'bridge-vlan');
+				c.set('network', sec, 'device', bridge);
+				c.set('network', sec, 'vlan', `${vid}`);
+			}
+
+			setopt(c, 'network', sec, 'ports', map(brports, (d) => `${d}:t`));
+		}
+	}
+
+	let stale_w = [];
+
+	c.foreach('network', 'bridge-vlan', (s) => {
+		if (match(s['.name'], /^unifi_wvlan[0-9]+$/) && !want_w[s['.name']])
+			push(stale_w, s['.name']);
+	});
+
+	for (let s in stale_w)
+		c.delete('network', s);
 
 	let want = {};
 
@@ -276,7 +318,7 @@ function plan_vlans(c, profile, vids, notes) {
 }
 
 // Applies the AP keys to cursor c. Returns notes.
-export function plan(cfg, profile, c) {
+export function plan(cfg, profile, c, switch_keys) {
 	let notes = [];
 	let f = features();
 	let phy = {};		// wifi0 -> profile radio
@@ -419,7 +461,7 @@ export function plan(cfg, profile, c) {
 		push(notes, `${s['.name']} ("${s.ssid}") is not in the controller's config: disabled`);
 	}
 
-	plan_vlans(c, profile, map(keys(vids), (v) => +v), notes);
+	plan_vlans(c, profile, map(keys(vids), (v) => +v), notes, switch_keys);
 
 	return notes;
 };
@@ -580,15 +622,15 @@ function deauth(profile, mac, ban_ms) {
 		{ addr: mac, reason: 5, deauth: true, ban_time: ban_ms }));
 }
 
-// Blocked clients get a short ban renewed on every inform round, so an
-// unblock takes effect when the renewal stops (hostapd cannot lift a ban
-// early).
-export function enforce_blocked(profile, macs, ban_ms) {
+// Blocked clients get an hour-long ban, renewed every round, so it never
+// lapses while the agent is busy; an unblock lifts it at once (a hostapd
+// ban_time of 0 removes an existing ban).
+export function enforce_blocked(profile, macs) {
 	if (!length(profile.radios))
 		return;
 
 	for (let mac in macs ?? [])
-		deauth(profile, mac, ban_ms ?? 60000);
+		deauth(profile, mac, 3600000);
 };
 
 // blocked_sta from setparam: comma-separated MACs.
@@ -617,6 +659,8 @@ export function command(profile, msg, st) {
 
 	if (msg.cmd == 'unblock-sta') {
 		st.blocked = filter(st.blocked ?? [], (m) => m != mac);
+		each_ap(profile, (dev) => ubus(`hostapd.${dev}`, 'del_client',
+			{ addr: mac, deauth: false, ban_time: 0 }));
 		return true;
 	}
 

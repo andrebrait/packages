@@ -114,11 +114,13 @@ export function apply(text, profile, opts) {
 
 	// Switch keys come for switches and for APs with a built-in switch; an
 	// AP without them keeps its bridge as it is.
-	if (length(filter(keys(cfg), (k) => match(k, /^switch\.(vlan|port)\./))))
+	let switch_keys = length(filter(keys(cfg), (k) => match(k, /^switch\.(vlan|port)\./))) > 0;
+
+	if (switch_keys)
 		notes = [ ...notes, ...sw.plan(cfg, profile, c) ];
 
 	if (length(profile.radios))
-		notes = [ ...notes, ...wifi.plan(cfg, profile, c) ];
+		notes = [ ...notes, ...wifi.plan(cfg, profile, c, switch_keys) ];
 
 	let changes = {}, touched = [];
 
@@ -168,11 +170,12 @@ export function apply(text, profile, opts) {
 		modes[pkg] = (stat(`${confdir}/${pkg}`)?.mode ?? 0o644) & 0o777;
 
 		if (backup[pkg] != null && !util.write_file(`${BACKUP}/${pkg}`, backup[pkg], 0o600)) {
-			log(`cannot back up ${pkg}; nothing applied`);
+			log(`cannot back up ${pkg}; nothing applied, will retry`);
 
 			for (let p in touched)
 				c.revert(p);
 
+			res.failed = true;
 			return res;
 		}
 	}
@@ -193,26 +196,39 @@ export function apply(text, profile, opts) {
 	reload(touched);
 	res.applied = true;
 
+	// One minute by the clock, however long each connection attempt takes
+	// (the init script gives a stop 90 s, to leave time for the restore).
 	let url = opts.inform_url;
-	let ok = false;
+	let deadline = time() + 60;
+	let ok = !url;
 
-	for (let i = 0; i < 12 && !ok; i++) {
+	while (!ok && time() < deadline) {
 		sleep(5000);
-		ok = !url || reachable(url);
+		ok = reachable(url);
 	}
 
 	if (!ok) {
 		log('controller unreachable after applying; rolling back');
 
-		for (let pkg in touched) {
-			if (backup[pkg] == null)
-				unlink(`${confdir}/${pkg}`);
-			else
-				util.write_file(`${confdir}/${pkg}`, backup[pkg], modes[pkg]);
-		}
+		let restore = (pkg) => (backup[pkg] == null)
+			? (unlink(`${confdir}/${pkg}`) || !stat(`${confdir}/${pkg}`))
+			: util.write_file(`${confdir}/${pkg}`, backup[pkg], modes[pkg]);
+		let failed = [];
+
+		for (let pkg in touched)
+			if (!restore(pkg) && !restore(pkg))
+				push(failed, pkg);
 
 		reload(touched);
-		res.rolled_back = true;
+
+		if (length(failed)) {
+			// The backups stay in /tmp/unifi-agent/rollback for a manual restore.
+			log(`ROLLBACK FAILED for ${join(', ', failed)}; copies are in ${BACKUP}`);
+			res.failed = true;
+		}
+		else {
+			res.rolled_back = true;
+		}
 	}
 
 	return res;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Small helpers shared by the agent's modules.
 
-import { readfile, writefile, popen, rename, mkdir, stat, chmod } from 'fs';
+import { readfile, writefile, popen, rename, mkdir, stat, chmod, unlink } from 'fs';
 
 // UniFi's flat "a.b.c=value" text (mgmt_cfg, system_cfg) as an object.
 export function parse_kv(text) {
@@ -42,13 +42,13 @@ export function write_file(path, data, mode) {
 	let now = clock();
 	let tmp = `${path}.${now[0]}${now[1]}.tmp`;
 
-	if (mode != null && (writefile(tmp, '') == null || !chmod(tmp, mode)))
+	if ((mode != null && (writefile(tmp, '') == null || !chmod(tmp, mode))) ||
+	    writefile(tmp, data) == null || !rename(tmp, path)) {
+		unlink(tmp);
 		return false;
+	}
 
-	if (writefile(tmp, data) == null)
-		return false;
-
-	return rename(tmp, path);
+	return true;
 };
 
 export function mkdir_p(path, mode) {

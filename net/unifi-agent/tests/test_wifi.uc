@@ -7,7 +7,7 @@ import { cursor } from 'uci';
 import { readfile } from 'fs';
 
 const DIR = sourcepath(0, true) + '/fixtures/ap';
-system(`rm -rf /tmp/uci-w && mkdir -p /tmp/uci-w/save && cp ${DIR}/wireless ${DIR}/network /tmp/uci-w/`);
+system(`rm -rf /tmp/uci-w && mkdir -p /tmp/uci-w/save && cp '${DIR}'/wireless '${DIR}'/network /tmp/uci-w/`);
 system('mkdir -p /usr/share/unifi-agent && cp ' + sourcepath(0, true) + '/../files/usr/share/unifi-agent/countries.json /usr/share/unifi-agent/');
 
 wifi.set_features({ r: false, k: true, v: true });

@@ -285,15 +285,24 @@ export function lldp_table(ports) {
 }
 
 // netifd device options per device name, as the agent last applied them.
+let devopts_cache = {};
+
+// libuci also loads changes staged with the CLI; while there are any for
+// network, keep reporting what was read before them.
 function device_options() {
+	let c = cursor();
+
+	if (length(c.changes('network')?.network ?? []))
+		return devopts_cache;
+
 	let out = {};
 
-	cursor().foreach('network', 'device', (s) => {
+	c.foreach('network', 'device', (s) => {
 		if (s.name)
 			out[s.name] = s;
 	});
 
-	return out;
+	return devopts_cache = out;
 }
 
 // Per-port values: autoneg live from ethtool; flow control and PoE as

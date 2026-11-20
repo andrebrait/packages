@@ -21,7 +21,7 @@ start_service() {
 	procd_set_param command /usr/sbin/unifi-agent run
 	# Restart on any config change, so SSH adoption follows its setting.
 	procd_set_param file /etc/config/unifi-agent
-	# A stop waits for a running apply to finish its rollback window.
+	# A stop waits for a running apply's 60 s rollback window and restore.
 	procd_set_param term_timeout 90
 	procd_set_param respawn 3600 5 0
 	procd_set_param stderr 1
