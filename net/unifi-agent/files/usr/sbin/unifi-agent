@@ -1,0 +1,91 @@
+#!/usr/bin/ucode
+// SPDX-License-Identifier: GPL-2.0-only
+// unifi-agent: presents this OpenWrt device to a UniFi Network controller.
+
+import { readfile } from 'fs';
+import * as profile from 'unifi.profile';
+import * as session from 'unifi.session';
+import * as collect from 'unifi.collect';
+import * as apply from 'unifi.apply';
+import * as diagram from 'unifi.diagram';
+import * as sshadopt from 'unifi.sshadopt';
+
+const USAGE = `Usage: unifi-agent <command>
+
+  run                 inform loop (started by /etc/init.d/unifi-agent)
+  show [--json]       the device as the controller sees it: model, ports, radios
+  models [text]       catalog models, optionally filtered by name or id
+  plan <file>         translate a saved system_cfg and print the UCI changes
+  dump                print the next inform payload
+  forget              drop the controller's key and go back to pending
+  cleanup             remove the SSH adoption account (run when stopping)
+`;
+
+let cmd = ARGV[0];
+
+if (cmd == 'run') {
+	let p = profile.load();
+
+	if (!p.enabled) {
+		sshadopt.account(false);
+		warn('unifi-agent: disabled in /etc/config/unifi-agent\n');
+		exit(0);
+	}
+
+	session.run(p);
+}
+else if (cmd == 'show') {
+	let p = profile.load();
+	let st = session.load_state();
+
+	if (ARGV[1] == '--json')
+		printf('%.J\n', diagram.describe(p, st));
+	else
+		print(diagram.render(p, st));
+}
+else if (cmd == 'models') {
+	let q = lc(ARGV[1] ?? '');
+
+	for (let id, m in profile.load_models()) {
+		if (q && index(lc(id), q) < 0 && index(lc(m.name), q) < 0)
+			continue;
+
+		let ports = join(' + ', map(m.ports, (r) => `${r[1]}x ${r[0]}${r[2] ? ' PoE' : ''}`));
+		let radios = join('/', map(m.radios ?? [], (r) => r.radio));
+
+		printf('%-10s %-4s %-40s %s%s\n', id, m.type, m.name, ports, radios ? `, radios ${radios}` : '');
+	}
+}
+else if (cmd == 'plan' && ARGV[1]) {
+	let text = readfile(ARGV[1]);
+
+	if (text == null) {
+		warn(`cannot read ${ARGV[1]}\n`);
+		exit(1);
+	}
+
+	let r = apply.apply(text, profile.load(), { dry_run: true, log: (m) => print(m, '\n') });
+
+	if (r.deferred)
+		print('plan not computed\n');
+	else if (!r.changed)
+		print('no changes\n');
+
+	if (length(r.unhandled))
+		print('not applied (no support yet): ', join(' ', r.unhandled), '\n');
+}
+else if (cmd == 'dump') {
+	let p = profile.load();
+	printf('%.J\n', collect.inform(p, session.load_state()));
+}
+else if (cmd == 'cleanup') {
+	sshadopt.account(false);
+}
+else if (cmd == 'forget') {
+	session.forget();
+	print('forgotten; restart the service to inform as a new device\n');
+}
+else {
+	warn(USAGE);
+	exit(cmd ? 1 : 0);
+}
