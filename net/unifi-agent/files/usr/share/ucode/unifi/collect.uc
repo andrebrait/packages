@@ -16,9 +16,6 @@ let sfp_cache = {};
 // The last uplink found: its devices and the gateway's MAC address.
 let last_uplink = { devs: [], mac: null };
 
-// When the gateway was last pinged to find the uplink.
-let last_ping = 0;
-
 function num(path) {
 	let s = util.read(path);
 	return (s != null && match(s, /^-?[0-9]+$/)) ? +s : null;
@@ -506,22 +503,16 @@ export function inform(profile, state, extra) {
 	}
 
 	if (length(profile.ports)) {
-		let fdb_now = () => util.run_json([ 'bridge', '-j', 'fdb', 'show', 'br', profile.bridge ]) ?? [];
-		let fdb = fdb_now();
+		// The uplink is the port the gateway answers on: ping it, then find
+		// where the bridge learned the address it answered from.
 		let gw = gateway(profile.bridge, m.inform_url);
+
+		if (gw)
+			util.run([ 'ping', '-c', '1', '-W', '1', gw.ip ]);
+
+		let fdb = util.run_json([ 'bridge', '-j', 'fdb', 'show', 'br', profile.bridge ]) ?? [];
 		let gwmac = gw ? gateway_mac(gw) : null;
 		let up = uplink_ports(fdb, profile.ports, gwmac, gw?.vid, bridge_member);
-
-		// The uplink is the port toward the gateway. When it is not known, make
-		// the gateway answer, at most once a minute: that resolves its address
-		// and has the bridge learn it again after ageing out.
-		if (gw && !length(up) && time() - last_ping >= 60) {
-			last_ping = time();
-			util.run([ 'ping', '-c', '1', '-W', '1', gw.ip ]);
-			fdb = fdb_now();
-			gwmac = gateway_mac(gw);
-			up = uplink_ports(fdb, profile.ports, gwmac, gw.vid, bridge_member);
-		}
 
 		[ up, gwmac, last_uplink ] = settle_uplink(up, gwmac, profile.ports, last_uplink, (d) => sysnet(d, 'carrier') == '1');
 
