@@ -42,4 +42,19 @@ t.eq(idx(collect.uplink_ports(fdb, ports, 'aa:bb:cc:00:00:02', null, member)), [
 t.eq([ collect.uplink_ports(fdb, ports, 'aa:bb:cc:00:00:03', null, member), collect.uplink_ports(fdb, ports, null, null, member) ], [ [], [] ], 'unknown or no gateway');
 t.eq(collect.mac_tables(fdb, ports).lan2, [ { mac: 'aa:bb:cc:00:00:01', age: 0, uptime: 0, static: false, vlan: 1 } ], 'mac table skips self and permanent entries');
 
+// The uplink report: every member flagged, the member with a neighbour (else
+// with carrier) named, and the gateway standing in for a missing neighbour.
+let rows = () => [ { port_idx: 1, up: true }, { port_idx: 5, up: false }, { port_idx: 6, up: true } ];
+let bond = [ ports[2], ports[3] ];
+let m = { port_table: rows(), lldp_table: [] };
+collect.report_uplink(m, bond, 'aa:bb:cc:00:00:09');
+t.eq([ map(m.port_table, (r) => r.is_uplink), m.uplink, m.lldp_table ],
+	[ [ false, true, true ], 'Port 6', [ { local_port_idx: 6, local_port_name: 'Port 6', chassis_id: 'aa:bb:cc:00:00:09', is_wired: true } ] ], 'carrier member, gateway stands in');
+m = { port_table: rows(), lldp_table: [ { local_port_idx: 5, local_port_name: 'Port 5', chassis_id: 'x', is_wired: true } ] };
+collect.report_uplink(m, bond, 'aa:bb:cc:00:00:09');
+t.eq([ m.uplink, length(m.lldp_table) ], [ 'Port 5', 1 ], 'member with a neighbour, none added');
+m = { port_table: rows(), lldp_table: [] };
+collect.report_uplink(m, [], null);
+t.eq([ map(m.port_table, (r) => r.is_uplink), m.uplink, m.lldp_table ], [ [ false, false, false ], null, [] ], 'no uplink');
+
 t.done();

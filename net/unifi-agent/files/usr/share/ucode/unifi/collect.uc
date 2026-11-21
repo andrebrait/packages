@@ -13,8 +13,8 @@ const STP_STATES = [ 'disabled', 'listening', 'learning', 'forwarding', 'blockin
 let cpu_prev = null;
 let sfp_cache = {};
 
-// The devices of the last uplink found.
-let last_uplink = [];
+// The last uplink found: its devices and the gateway's MAC address.
+let last_uplink = { devs: [], mac: null };
 
 function num(path) {
 	let s = util.read(path);
@@ -314,6 +314,29 @@ export function uplink_ports(fdb, ports, mac, vid, member_of) {
 	return [];
 }
 
+// Marks the uplink ports (up) in the payload m. The controller takes as
+// uplink the port_table row whose LLDP neighbour's local_port_name equals
+// m.uplink: a bond member with a neighbour, else one with carrier. Without a
+// neighbour there, the gateway (gwmac) stands in for one.
+export function report_uplink(m, up, gwmac) {
+	let idxs = map(up, (p) => p.idx);
+	let row_of = (p) => filter(m.port_table, (r) => r.port_idx == p.idx)[0];
+	let has_lldp = (p) => length(filter(m.lldp_table, (r) => r.local_port_idx == p.idx)) > 0;
+
+	for (let r in m.port_table)
+		r.is_uplink = r.port_idx in idxs;
+
+	let pick = filter(up, has_lldp)[0] ?? filter(up, (p) => row_of(p)?.up)[0] ?? up[0];
+
+	if (!pick)
+		return;
+
+	m.uplink = port_name(pick);
+
+	if (gwmac && !has_lldp(pick))
+		push(m.lldp_table, { local_port_idx: pick.idx, local_port_name: m.uplink, chassis_id: gwmac, is_wired: true });
+}
+
 // `lldpcli -f json0 show neighbors`, keyed by local port.
 export function lldp_table(ports) {
 	let j = util.run_json([ 'lldpcli', '-f', 'json0', 'show', 'neighbors' ]);
@@ -472,19 +495,21 @@ export function inform(profile, state, extra) {
 			up = uplink_ports(fdb, profile.ports, gwmac, gw.vid, bridge_member);
 		}
 
-		// Keep the last uplink (by device, as ports are rebuilt with the
-		// profile) while the gateway's address is not resolved.
+		// While the gateway's address is not resolved, keep the last uplink
+		// (by device, as ports are rebuilt with the profile) as long as it has
+		// carrier.
 		if (gwmac)
-			last_uplink = map(up, (p) => p.dev);
-		else
-			up = filter(profile.ports, (p) => p.dev in last_uplink);
+			last_uplink = { devs: map(up, (p) => p.dev), mac: gwmac };
+		else {
+			up = filter(profile.ports, (p) => p.dev in last_uplink.devs && sysnet(p.dev, 'carrier') == '1');
+			gwmac = length(up) ? last_uplink.mac : null;
+		}
 
 		let macs = mac_tables(fdb, profile.ports);
 		let devopts = device_options();
 
 		m.port_table = map(profile.ports, (p) => {
 			let row = port_row(p, port_dynamic(p.dev, devopts[p.dev]));
-			row.is_uplink = p in up;
 			row.mac_table = macs[p.dev] ?? [];
 			return row;
 		});
@@ -492,15 +517,7 @@ export function inform(profile, state, extra) {
 		m.ethernet_table = [ { mac, name: 'eth0', num_port: length(profile.model_ports) } ];
 		m.lldp_table = lldp_table(profile.ports);
 
-		// The controller marks as uplink the port_table row whose LLDP
-		// neighbour's local_port_name equals this; without a neighbour on the
-		// uplink, the gateway stands in for one.
-		if (length(up)) {
-			m.uplink = port_name(up[0]);
-
-			if (gwmac && !length(filter(m.lldp_table, (r) => r.local_port_idx == up[0].idx)))
-				push(m.lldp_table, { local_port_idx: up[0].idx, local_port_name: m.uplink, chassis_id: gwmac, is_wired: true });
-		}
+		report_uplink(m, up, gwmac);
 	}
 
 	if (profile.type == 'usw') {
