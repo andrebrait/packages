@@ -16,6 +16,9 @@ let sfp_cache = {};
 // The last uplink found: its devices and the gateway's MAC address.
 let last_uplink = { devs: [], mac: null };
 
+// When the gateway was last pinged to find the uplink.
+let last_ping = 0;
+
 function num(path) {
 	let s = util.read(path);
 	return (s != null && match(s, /^-?[0-9]+$/)) ? +s : null;
@@ -280,12 +283,24 @@ export function mac_tables(fdb, ports) {
 }
 
 // The default gateway: its address, the device it is reached through and,
-// when that device is a VLAN of the bridge, the VLAN.
-function gateway(bridge) {
+// when that device is a VLAN of the bridge, the VLAN. Without a default
+// route, the inform URL's host stands in for it, when on-link or routed.
+function gateway(bridge, url) {
 	let r = util.run_json([ 'ip', '-j', '-4', 'route', 'show', 'default' ])?.[0];
-	let v = match(r?.dev ?? '', /^(.+)\.([0-9]+)$/);
+	let host = match(url ?? '', /^[A-Za-z]+:\/\/([0-9.]+)[:\/]/)?.[1];
 
-	return r?.gateway ? { ip: r.gateway, dev: r.dev, vid: (v?.[1] == bridge) ? +v[2] : null } : null;
+	if (!r?.gateway && host) {
+		r = util.run_json([ 'ip', '-j', '-4', 'route', 'get', host ])?.[0];
+		r = r ? { ...r, gateway: r.gateway ?? host } : null;
+	}
+
+	if (!r?.gateway)
+		return null;
+
+	let l = util.run_json([ 'ip', '-j', '-d', 'link', 'show', 'dev', r.dev ])?.[0];
+	let vlan = (l?.link == bridge && l?.linkinfo?.info_kind == 'vlan') ? l.linkinfo.info_data?.id : null;
+
+	return { ip: r.gateway, dev: r.dev, vid: vlan };
 }
 
 // The gateway's MAC address, from a neighbour entry that holds one.
@@ -302,7 +317,7 @@ function gateway_mac(gw) {
 // device to the bridge port that carries it.
 export function uplink_ports(fdb, ports, mac, vid, member_of) {
 	for (let e in fdb) {
-		if (!mac || e.mac != mac || 'self' in (e.flags ?? []) || e.state == 'permanent' || (vid && e.vlan && +e.vlan != vid))
+		if (!mac || lc(e.mac ?? '') != lc(mac) || 'self' in (e.flags ?? []) || e.state == 'permanent' || (vid && e.vlan && +e.vlan != vid))
 			continue;
 
 		let up = filter(ports, (p) => p.dev == e.ifname || member_of(p.dev) == e.ifname);
@@ -312,6 +327,18 @@ export function uplink_ports(fdb, ports, mac, vid, member_of) {
 	}
 
 	return [];
+}
+
+// The uplink to report and what to remember: up when found, else the last
+// one (by device, as ports are rebuilt with the profile) while it has
+// carrier. Returns [ ports, gateway MAC, new last ].
+export function settle_uplink(up, gwmac, ports, last, carrier) {
+	if (length(up))
+		return [ up, gwmac, { devs: map(up, (p) => p.dev), mac: gwmac } ];
+
+	let kept = filter(ports, (p) => p.dev in last.devs && carrier(p.dev));
+
+	return [ kept, length(kept) ? last.mac : null, last ];
 }
 
 // Marks the uplink ports (up) in the payload m. The controller takes as
@@ -481,29 +508,22 @@ export function inform(profile, state, extra) {
 	if (length(profile.ports)) {
 		let fdb_now = () => util.run_json([ 'bridge', '-j', 'fdb', 'show', 'br', profile.bridge ]) ?? [];
 		let fdb = fdb_now();
-		let gw = gateway(profile.bridge);
+		let gw = gateway(profile.bridge, m.inform_url);
 		let gwmac = gw ? gateway_mac(gw) : null;
 		let up = uplink_ports(fdb, profile.ports, gwmac, gw?.vid, bridge_member);
 
 		// The uplink is the port toward the gateway. When it is not known, make
-		// the gateway answer once: that resolves its address and has the bridge
-		// learn it again after ageing out.
-		if (gw && !length(up)) {
+		// the gateway answer, at most once a minute: that resolves its address
+		// and has the bridge learn it again after ageing out.
+		if (gw && !length(up) && time() - last_ping >= 60) {
+			last_ping = time();
 			util.run([ 'ping', '-c', '1', '-W', '1', gw.ip ]);
 			fdb = fdb_now();
 			gwmac = gateway_mac(gw);
 			up = uplink_ports(fdb, profile.ports, gwmac, gw.vid, bridge_member);
 		}
 
-		// While the gateway's address is not resolved, keep the last uplink
-		// (by device, as ports are rebuilt with the profile) as long as it has
-		// carrier.
-		if (gwmac)
-			last_uplink = { devs: map(up, (p) => p.dev), mac: gwmac };
-		else {
-			up = filter(profile.ports, (p) => p.dev in last_uplink.devs && sysnet(p.dev, 'carrier') == '1');
-			gwmac = length(up) ? last_uplink.mac : null;
-		}
+		[ up, gwmac, last_uplink ] = settle_uplink(up, gwmac, profile.ports, last_uplink, (d) => sysnet(d, 'carrier') == '1');
 
 		let macs = mac_tables(fdb, profile.ports);
 		let devopts = device_options();

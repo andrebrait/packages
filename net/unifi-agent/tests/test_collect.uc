@@ -57,4 +57,13 @@ m = { port_table: rows(), lldp_table: [] };
 collect.report_uplink(m, [], null);
 t.eq([ map(m.port_table, (r) => r.is_uplink), m.uplink, m.lldp_table ], [ [ false, false, false ], null, [] ], 'no uplink');
 
+// The last uplink is kept on a miss while it has carrier, and replaced by a find.
+let last = { devs: [ 'lan5', 'lan6' ], mac: 'aa:bb:cc:00:00:09' };
+let carrier = (d) => d != 'lan6';
+t.eq(collect.settle_uplink([ ports[1] ], 'aa:bb:cc:00:00:01', ports, last, carrier),
+	[ [ ports[1] ], 'aa:bb:cc:00:00:01', { devs: [ 'lan2' ], mac: 'aa:bb:cc:00:00:01' } ], 'found');
+t.eq(collect.settle_uplink([], 'aa:bb:cc:00:00:01', ports, last, carrier), [ [ ports[2] ], 'aa:bb:cc:00:00:09', last ], 'miss keeps the members with carrier');
+t.eq(collect.settle_uplink([], null, ports, last, () => false), [ [], null, last ], 'no carrier, no uplink');
+t.eq(idx(collect.uplink_ports(fdb, ports, 'AA:BB:CC:00:00:01', 1, member)), [ 2 ], 'MAC case does not matter');
+
 t.done();
