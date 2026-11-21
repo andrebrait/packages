@@ -281,17 +281,15 @@ export function mac_tables(fdb, ports) {
 
 // The default gateway: its address, the device it is reached through and,
 // when that device is a VLAN of the bridge, the VLAN. Without a default
-// route, the inform URL's host stands in for it, when on-link or routed.
+// route, the router toward the inform URL's host, if there is one.
 function gateway(bridge, url) {
 	let r = util.run_json([ 'ip', '-j', '-4', 'route', 'show', 'default' ])?.[0];
 	let host = match(url ?? '', /^[A-Za-z]+:\/\/([0-9.]+)[:\/]/)?.[1];
 
-	if (!r?.gateway && host) {
+	if (!r?.gateway && host)
 		r = util.run_json([ 'ip', '-j', '-4', 'route', 'get', host ])?.[0];
-		r = r ? { ...r, gateway: r.gateway ?? host } : null;
-	}
 
-	if (!r?.gateway)
+	if (!r?.gateway || !r.dev)
 		return null;
 
 	let l = util.run_json([ 'ip', '-j', '-d', 'link', 'show', 'dev', r.dev ])?.[0];
@@ -326,11 +324,12 @@ export function uplink_ports(fdb, ports, mac, vid, member_of) {
 	return [];
 }
 
-// The uplink to report and what to remember: up when found, else the last
-// one (by device, as ports are rebuilt with the profile) while it has
-// carrier. Returns [ ports, gateway MAC, new last ].
+// The uplink to report and what to remember: what was found while the
+// gateway's address is known, else the last one (by device, as ports are
+// rebuilt with the profile) while it has carrier. Returns [ ports, gateway
+// MAC, new last ].
 export function settle_uplink(up, gwmac, ports, last, carrier) {
-	if (length(up))
+	if (gwmac)
 		return [ up, gwmac, { devs: map(up, (p) => p.dev), mac: gwmac } ];
 
 	let kept = filter(ports, (p) => p.dev in last.devs && carrier(p.dev));
