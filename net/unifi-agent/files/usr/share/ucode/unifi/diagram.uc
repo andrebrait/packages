@@ -67,7 +67,7 @@ export function render(p, st) {
 	let W = 6;
 
 	push(out, `${d.model_display} (${d.model}), ${d.type == 'uap' ? 'access point' : 'switch'}`);
-	push(out, `controller: ${d.inform_url ?? 'not set'}   ${d.adopted ? 'adopted' + (d.gcm ? ', AES-GCM' : '') : 'not adopted'}   apply: ${!d.apply ? 'log only' : ((length(d.apply_cats) >= 8) ? 'all' : join(', ', d.apply_cats))}`);
+	push(out, `controller: ${d.inform_url ?? 'not set'}   ${d.adopted ? 'adopted' + (d.gcm ? ', AES-GCM' : '') : 'not adopted'}   apply: ${!d.apply ? 'log only' : ((length(d.apply_cats) >= length(profile_mod.CATEGORIES)) ? 'all' : join(', ', d.apply_cats))}`);
 	push(out, '');
 
 	// Group ports into copper and fibre blocks, as on a front panel.

@@ -298,6 +298,7 @@ export function load(opts) {
 	if (!radio_sections && util.bool(main.wireless, true))
 		radios = local_radios(uci);
 
+	let cats = apply_categories(main.apply);
 	let model = main.model ?? 'auto';
 	let candidates = suggest(models, ports, radios);
 
@@ -326,8 +327,8 @@ export function load(opts) {
 		inform_url: main.inform_url,
 		// Unset means log only: applying needs an explicit yes, as '1' (all)
 		// or a list of categories.
-		apply_cats: apply_categories(main.apply),
-		apply: length(apply_categories(main.apply)) > 0,
+		apply_cats: cats,
+		apply: length(cats) > 0,
 		interval: (+main.interval >= 1) ? +main.interval : 10,
 		bridge,
 		mgmt_interface: iface,

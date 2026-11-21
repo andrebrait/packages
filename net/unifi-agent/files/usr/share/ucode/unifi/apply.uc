@@ -121,8 +121,9 @@ export function apply(text, profile, opts) {
 		if (switch_keys)
 			n = [ ...n, ...sw.plan(cfg, profile, c, cats) ];
 
+		// The switch side owns WLAN VLAN membership only when it applies VLANs.
 		if (length(profile.radios) && (!cats || cats.wifi))
-			n = [ ...n, ...wifi.plan(cfg, profile, c, switch_keys) ];
+			n = [ ...n, ...wifi.plan(cfg, profile, c, switch_keys && (!cats || cats.vlans)) ];
 
 		return n;
 	};
@@ -139,9 +140,10 @@ export function apply(text, profile, opts) {
 		return out;
 	};
 
-	// Log only plans everything; otherwise only the chosen categories.
+	// Log only plans everything; otherwise (a dry run included) only the
+	// chosen categories.
 	let logging = opts.dry_run || !profile.apply;
-	let cats = logging ? null : profile.apply_cats;
+	let cats = profile.apply ? profile.apply_cats : null;
 	let c = cursor(opts.uci_dir, save_dir);
 	let notes = plan_into(c, cats);
 	let changes = changes_of(c), touched = keys(changes);
@@ -159,8 +161,11 @@ export function apply(text, profile, opts) {
 		let full = cursor(opts.uci_dir, full_dir);
 		plan_into(full, null);
 
-		let applied = describe(changes);
-		withheld = filter(describe(changes_of(full)), (l) => !(l in applied));
+		// By option, not by line: a value the chosen categories changed
+		// differently was applied, just not as the full plan has it.
+		let key = (l) => split(l, ' ')[1];
+		let applied = map(describe(changes), key);
+		withheld = filter(describe(changes_of(full)), (l) => !(key(l) in applied));
 
 		for (let pkg in PACKAGES)
 			full.revert(pkg);
@@ -230,7 +235,9 @@ export function apply(text, profile, opts) {
 	for (let pkg in touched)
 		c.commit(pkg);
 
-	reload(touched);
+	if (!opts.no_reload)
+		reload(touched);
+
 	res.applied = true;
 
 	// One minute by the clock, however long each connection attempt takes

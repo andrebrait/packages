@@ -113,7 +113,7 @@ export function parse(cfg) {
 };
 
 // VLAN membership per UniFi port: { vid: { idx: 'u*' | 'u' | 't' } }.
-export function membership(sw, nports) {
+export function membership(sw, nports, keep_mirror) {
 	let out = {}, native = null;
 
 	for (let slot, v in sw.vlans)
@@ -133,7 +133,7 @@ export function membership(sw, nports) {
 			let mode = v.ports[n] ?? v.mode;
 			let pvid = +(port.pvid ?? native);
 
-			if (port.opmode == 'mirror')
+			if (port.opmode == 'mirror' && !keep_mirror)
 				continue;
 
 			if (pvid == vid && mode != 'exclude')
@@ -183,17 +183,30 @@ export function plan(cfg, profile, c, cats) {
 		}
 	}
 
-	// With lag off, aggregated ports count as plain ports for their VLANs.
-	if (!on('lag')) {
+	// Bonds change bridge ports and VLAN membership together, so lag is
+	// applied only with vlans. Otherwise the bonds this agent made stay as
+	// they are, and their members keep standing for them in VLANs.
+	if (on('lag') && !on('vlans'))
+		push(notes, 'link aggregation is applied only together with VLANs');
+
+	if (!on('lag') || !on('vlans')) {
 		lags = {};
 		lag_of = {};
+
+		c.foreach('network', 'device', (s) => {
+			if (s.type == 'bonding' && match(s['.name'], /^unifi_lag[0-9]+$/))
+				for (let d in uci_list(s.ports))
+					for (let p in profile.ports)
+						if (p.dev == d)
+							lag_of[p.idx] = s.name;
+		});
 	}
 
 	// Without the management VLAN among the controller's VLANs, bonds,
 	// bridge ports and VLANs stay as they are: changing them alone could
 	// leave ports, or the device itself, without a VLAN.
 	let mvid = +(cfg['switch.managementvlan'] ?? 1);
-	let members = membership(sw, length(profile.model_ports));
+	let members = membership(sw, length(profile.model_ports), !on('mirror'));
 	let vlan_ok = members[mvid] != null;
 	let managed = {}, brports = bridge_members(c, bridge);
 
@@ -211,7 +224,7 @@ export function plan(cfg, profile, c, cats) {
 	for (let l in keys(lags))
 		own_bonds[`lag${l}`] = true;
 
-	if (vlan_ok && on('lag')) {
+	if (vlan_ok && on('lag') && on('vlans')) {
 		let bonds = {};
 
 		c.foreach('network', 'device', (s) => {
@@ -338,6 +351,15 @@ export function plan(cfg, profile, c, cats) {
 	if (!vlan_ok) {
 		// Filtering without the management VLAN would cut the device off.
 		push(notes, `management VLAN ${mvid} is not among the controller's VLANs; VLAN settings left unchanged`);
+	}
+	else if (!on('vlans') && on('igmp')) {
+		c.foreach('network', 'bridge-vlan', (s) => {
+			if (s.device == bridge && match(s['.name'], /^unifi_vlan[0-9]+$/)) {
+				let vid = +s.vlan;
+				setopt(c, 'network', s['.name'], 'mcast_snooping', igmp ? (snoop[vid] ? '1' : '0') : null);
+				setopt(c, 'network', s['.name'], 'mcast_querier', querier[vid] ? '1' : null);
+			}
+		});
 	}
 	else if (on('vlans')) {
 		setopt(c, 'network', brsec, 'vlan_filtering', '1');
