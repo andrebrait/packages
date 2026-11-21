@@ -3,6 +3,8 @@
 import * as t from 'assert';
 import * as sw from 'unifi.switch';
 import * as util from 'unifi.util';
+import * as apply from 'unifi.apply';
+import * as profile_mod from 'unifi.profile';
 import { cursor } from 'uci';
 import { readfile } from 'fs';
 
@@ -91,5 +93,23 @@ let cq = cursor('/tmp/uci-p', '/tmp/uci-p/save2');
 sw.plan(util.parse_kv('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\nswitch.port.1.flowctrl=enabled\n'),
 	{ ...profile, bridge: 'switch', ports: [ { idx: 1, dev: 'lan5', media: 'SFP+', model_media: 'GE', speeds: [] } ] }, cq);
 t.eq(cq.get('network', 'old5', 'pause'), null, 'local media decides');
+
+// Categories: VLANs only leaves ports, STP and flow control alone, and the
+// withheld changes are still listed.
+t.eq(profile_mod.apply_categories([ 'vlans', 'bogus' ]), { vlans: true }, 'category list');
+t.eq(length(profile_mod.apply_categories('1')), length(profile_mod.CATEGORIES), "'1' means all");
+t.eq(profile_mod.apply_categories('0'), {}, "'0' means none");
+
+system(`rm -rf /tmp/uci-c && mkdir -p /tmp/uci-c && cp '${DIR}'/lg510s-vlanonly/* /tmp/uci-c/`);
+let ccfg = 'switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\nswitch.vlan.2.id=10\nswitch.vlan.2.mode=tagged\nswitch.vlan.2.status=enabled\nswitch.stp.status=enabled\nswitch.port.1.flowctrl=enabled\nswitch.port.1.status=disabled\n';
+let cprof = { ...profile, bridge: 'switch', apply: true, apply_cats: { vlans: true } };
+let res = apply.apply(ccfg, cprof, { uci_dir: '/tmp/uci-c', save_dir: '/tmp/uci-c/agent', user_save_dir: '/tmp/uci-c/user', log: () => null });
+let cc = cursor('/tmp/uci-c', '/tmp/uci-c/none');
+t.ok(res.applied, 'vlans applied');
+t.eq(cc.get('network', 'unifi_vlan10', 'vlan'), '10', 'VLAN 10 created');
+t.eq(cc.get('network', 'switch', 'stp'), null, 'STP not applied');
+t.eq(cc.get('network', 'unifi_lan1'), null, 'no port settings applied');
+t.ok(length(filter(res.withheld, (l) => index(l, 'stp') >= 0)) > 0, 'STP listed as withheld');
+t.ok(length(filter(res.withheld, (l) => index(l, 'enabled') >= 0)) > 0, 'port disable listed as withheld');
 
 t.done();

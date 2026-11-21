@@ -18,6 +18,24 @@ const SPEED_BITS = {
 };
 export const SPEED_AUTONEG = 1048576;
 
+// What `list apply` can name; '1' names them all.
+export const CATEGORIES = [ 'vlans', 'ports', 'lag', 'stp', 'igmp', 'jumbo', 'mirror', 'wifi' ];
+
+// The categories to apply, as an object, from the apply option or list.
+export function apply_categories(v) {
+	let out = {};
+
+	for (let c in util.uci_list(v)) {
+		if (util.bool(c, false))
+			for (let k in CATEGORIES)
+				out[k] = true;
+		else if (c in CATEGORIES)
+			out[c] = true;
+	}
+
+	return out;
+};
+
 const BANDS = { '2g': 'ng', '5g': 'na', '6g': '6e' };
 
 export function is_fiber(media) {
@@ -306,8 +324,10 @@ export function load(opts) {
 	return {
 		enabled: util.bool(main.enabled, false),
 		inform_url: main.inform_url,
-		// Unset means log only: applying needs an explicit yes.
-		apply: util.bool(main.apply, false),
+		// Unset means log only: applying needs an explicit yes, as '1' (all)
+		// or a list of categories.
+		apply_cats: apply_categories(main.apply),
+		apply: length(apply_categories(main.apply)) > 0,
 		interval: (+main.interval >= 1) ? +main.interval : 10,
 		bridge,
 		mgmt_interface: iface,

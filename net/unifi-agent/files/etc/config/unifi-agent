@@ -7,7 +7,9 @@ config agent 'main'
 	option inform_url ''
 	# A model from `unifi-agent models`, or auto to pick from the hardware.
 	option model 'auto'
-	# 0: translate and log the controller's settings, change nothing.
+	# What to apply from the controller; the rest is only logged. '1' for
+	# everything, or a list of: vlans ports lag stp igmp jumbo mirror wifi
+	# (e.g. list apply 'vlans'). Unset or '0': log only.
 	option apply '0'
 	# The interface the device is managed on.
 	option interface 'lan'

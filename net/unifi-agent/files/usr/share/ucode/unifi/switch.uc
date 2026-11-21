@@ -150,8 +150,11 @@ export function membership(sw, nports) {
 	return out;
 };
 
-// Applies the switch.* keys to cursor c. Returns notes (strings).
-export function plan(cfg, profile, c) {
+// Applies the switch.* keys to cursor c. Returns notes (strings). cats, when
+// given, holds the categories to apply (see profile.CATEGORIES); the rest of
+// the configuration is left as it is.
+export function plan(cfg, profile, c, cats) {
+	let on = (k) => !cats || !!cats[k];
 	let notes = [];
 	let sw = parse(cfg);
 	let bridge = profile.bridge;
@@ -180,6 +183,12 @@ export function plan(cfg, profile, c) {
 		}
 	}
 
+	// With lag off, aggregated ports count as plain ports for their VLANs.
+	if (!on('lag')) {
+		lags = {};
+		lag_of = {};
+	}
+
 	// Without the management VLAN among the controller's VLANs, bonds,
 	// bridge ports and VLANs stay as they are: changing them alone could
 	// leave ports, or the device itself, without a VLAN.
@@ -202,7 +211,7 @@ export function plan(cfg, profile, c) {
 	for (let l in keys(lags))
 		own_bonds[`lag${l}`] = true;
 
-	if (vlan_ok) {
+	if (vlan_ok && on('lag')) {
 		let bonds = {};
 
 		c.foreach('network', 'device', (s) => {
@@ -254,10 +263,14 @@ export function plan(cfg, profile, c) {
 	let mtu = jumbo ? +(cfg['switch.mtu'] ?? 9216) : null;
 	let stp = cfg['switch.stp.status'] == 'enabled';
 
-	setopt(c, 'network', brsec, 'mtu', mtu);
-	setopt(c, 'network', brsec, 'stp', stp ? '1' : null);
-	setopt(c, 'network', brsec, 'stp_proto', stp ? ((cfg['switch.stp.version'] == 'stp') ? 'stp' : 'rstp') : null);
-	setopt(c, 'network', brsec, 'priority', (stp && cfg['switch.stp.priority'] != null) ? +cfg['switch.stp.priority'] : null);
+	if (on('jumbo'))
+		setopt(c, 'network', brsec, 'mtu', mtu);
+
+	if (on('stp')) {
+		setopt(c, 'network', brsec, 'stp', stp ? '1' : null);
+		setopt(c, 'network', brsec, 'stp_proto', stp ? ((cfg['switch.stp.version'] == 'stp') ? 'stp' : 'rstp') : null);
+		setopt(c, 'network', brsec, 'priority', (stp && cfg['switch.stp.priority'] != null) ? +cfg['switch.stp.priority'] : null);
+	}
 
 	let igmp = false, snoop = {}, querier = {}, fastleave = {};
 
@@ -271,8 +284,10 @@ export function plan(cfg, profile, c) {
 		fastleave[v.id] = (v.igmp_snooping == 'true' && v.igmp_fastleave == 'true');
 	}
 
-	setopt(c, 'network', brsec, 'igmp_snooping', igmp ? '1' : null);
-	setopt(c, 'network', brsec, 'multicast_querier', null);
+	if (on('igmp')) {
+		setopt(c, 'network', brsec, 'igmp_snooping', igmp ? '1' : null);
+		setopt(c, 'network', brsec, 'multicast_querier', null);
+	}
 
 	// VLANs: the agent owns every bridge-vlan of the bridge.
 	let want = {};
@@ -324,7 +339,7 @@ export function plan(cfg, profile, c) {
 		// Filtering without the management VLAN would cut the device off.
 		push(notes, `management VLAN ${mvid} is not among the controller's VLANs; VLAN settings left unchanged`);
 	}
-	else {
+	else if (on('vlans')) {
 		setopt(c, 'network', brsec, 'vlan_filtering', '1');
 
 		let have = {};
@@ -351,8 +366,11 @@ export function plan(cfg, profile, c) {
 			}
 
 			setopt(c, 'network', sec, 'ports', ports);
-			setopt(c, 'network', sec, 'mcast_snooping', igmp ? (snoop[vid] ? '1' : '0') : null);
-			setopt(c, 'network', sec, 'mcast_querier', querier[vid] ? '1' : null);
+
+			if (on('igmp')) {
+				setopt(c, 'network', sec, 'mcast_snooping', igmp ? (snoop[vid] ? '1' : '0') : null);
+				setopt(c, 'network', sec, 'mcast_querier', querier[vid] ? '1' : null);
+			}
 		}
 
 		// The management interface rides the management VLAN.
@@ -364,6 +382,9 @@ export function plan(cfg, profile, c) {
 
 	// Per-port device options.
 	for (let p in profile.ports) {
+		if (!on('ports') && !on('jumbo') && !on('igmp'))
+			break;
+
 		let sp = sw.ports[p.idx] ?? {};
 		let sec = ensure_device(c, p.dev);
 		let forced = sp.autoneg == 'disabled';
@@ -382,29 +403,35 @@ export function plan(cfg, profile, c) {
 			if (m[p.idx] && fastleave[vid])
 				fl = true;
 
-		setopt(c, 'network', sec, 'enabled', (sp.status == 'disabled') ? '0' : null);
-		setopt(c, 'network', sec, 'autoneg', forced ? '0' : null);
-		setopt(c, 'network', sec, 'speed', forced ? sp.speed : null);
-		setopt(c, 'network', sec, 'duplex', forced ? ((sp.duplex == 'disabled') ? '0' : '1') : null);
-		setopt(c, 'network', sec, 'pause', fiber ? null : ((sp.flowctrl == 'enabled') ? '1' : '0'));
-		setopt(c, 'network', sec, 'isolate', (sp.isolation == 'enabled') ? '1' : null);
-		setopt(c, 'network', sec, 'mtu', mtu);
-		setopt(c, 'network', sec, 'multicast_fast_leave', fl ? '1' : null);
+		if (on('ports')) {
+			setopt(c, 'network', sec, 'enabled', (sp.status == 'disabled') ? '0' : null);
+			setopt(c, 'network', sec, 'autoneg', forced ? '0' : null);
+			setopt(c, 'network', sec, 'speed', forced ? sp.speed : null);
+			setopt(c, 'network', sec, 'duplex', forced ? ((sp.duplex == 'disabled') ? '0' : '1') : null);
+			setopt(c, 'network', sec, 'pause', fiber ? null : ((sp.flowctrl == 'enabled') ? '1' : '0'));
+			setopt(c, 'network', sec, 'isolate', (sp.isolation == 'enabled') ? '1' : null);
 
-		if (fiber)
-			setopt(c, 'network', sec, 'eee', null);
-		else if (sp.eee != null)
-			setopt(c, 'network', sec, 'eee', (sp.eee == 'enabled') ? '1' : '0');
+			if (fiber)
+				setopt(c, 'network', sec, 'eee', null);
+			else if (sp.eee != null)
+				setopt(c, 'network', sec, 'eee', (sp.eee == 'enabled') ? '1' : '0');
 
-		if (p.poe && sp.poe != null)
-			setopt(c, 'network', sec, 'pse', (sp.poe == 'shutdown' || sp.poe == 'off') ? '0' : '1');
+			if (p.poe && sp.poe != null)
+				setopt(c, 'network', sec, 'pse', (sp.poe == 'shutdown' || sp.poe == 'off') ? '0' : '1');
 
-		if (forced && !(+sp.speed in (p.speeds ?? [])))
-			push(notes, `port ${p.idx} (${p.dev}): forced speed ${sp.speed} not in ${join('/', p.speeds ?? [])}`);
+			if (forced && !(+sp.speed in (p.speeds ?? [])))
+				push(notes, `port ${p.idx} (${p.dev}): forced speed ${sp.speed} not in ${join('/', p.speeds ?? [])}`);
+		}
+
+		if (on('jumbo'))
+			setopt(c, 'network', sec, 'mtu', mtu);
+
+		if (on('igmp'))
+			setopt(c, 'network', sec, 'multicast_fast_leave', fl ? '1' : null);
 	}
 
 	// Mirror and egress rate limits go to switchdev-config, if installed.
-	if (has_switchdev()) {
+	if (has_switchdev() && on('mirror')) {
 		let mirror = null, limits = {};
 
 		for (let n, sp in sw.ports) {
@@ -452,7 +479,7 @@ export function plan(cfg, profile, c) {
 		for (let sec in keys(have_rl))
 			c.delete('switchdev', sec);
 	}
-	else {
+	else if (on('mirror')) {
 		for (let n, sp in sw.ports)
 			if (sp.opmode == 'mirror' || sp.egress_rate_limit_kbps)
 				push(notes, `port ${n}: mirroring and rate limits need switchdev-config`);
