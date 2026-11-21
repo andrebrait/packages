@@ -13,6 +13,9 @@ const STP_STATES = [ 'disabled', 'listening', 'learning', 'forwarding', 'blockin
 let cpu_prev = null;
 let sfp_cache = {};
 
+// The last uplink found: its devices and the gateway's MAC address.
+let last_uplink = { devs: [], mac: null };
+
 function num(path) {
 	let s = util.read(path);
 	return (s != null && match(s, /^-?[0-9]+$/)) ? +s : null;
@@ -168,6 +171,10 @@ function sfp_info(dev) {
 	return c.info;
 }
 
+function port_name(p) {
+	return p.name ?? `Port ${p.idx}`;
+}
+
 // The port that carries a member: itself, or the bond it is enslaved to.
 function bridge_member(dev) {
 	let master = readfile(`/sys/class/net/${dev}/master/uevent`);
@@ -187,7 +194,7 @@ export function port_row(p, dyn) {
 
 	let row = {
 		port_idx: p.idx,
-		name: p.name ?? `Port ${p.idx}`,
+		name: port_name(p),
 		ifname: dev,
 		media: p.model_media ?? p.media,
 		enable: sysnet(dev, 'flags') != null ? !!(hex(sysnet(dev, 'flags')) & 1) : true,
@@ -200,7 +207,7 @@ export function port_row(p, dyn) {
 		poe_caps: 0,
 		port_poe: false,
 		jumbo: mtu > 1500,
-		is_uplink: !!p.uplink,
+		is_uplink: false,
 		stp_state: (brstate != null) ? STP_STATES[brstate] ?? 'disabled' : 'disabled',
 		stp_pathcost: num(`/sys/class/net/${member}/brport/path_cost`) ?? 0,
 		rx_bytes: stat_counter(dev, 'rx_bytes'),
@@ -246,8 +253,7 @@ export function port_row(p, dyn) {
 }
 
 // `bridge -j fdb show br <bridge>`: learned addresses per port.
-export function mac_tables(bridge, ports) {
-	let fdb = util.run_json([ 'bridge', '-j', 'fdb', 'show', 'br', bridge ]) ?? [];
+export function mac_tables(fdb, ports) {
 	let by_dev = {}, own = {};
 
 	for (let p in ports) {
@@ -273,6 +279,87 @@ export function mac_tables(bridge, ports) {
 	return by_dev;
 }
 
+// The default gateway: its address, the device it is reached through and,
+// when that device is a VLAN of the bridge, the VLAN. Without a default
+// route, the router toward the inform URL's host, if there is one.
+function gateway(bridge, url) {
+	let r = util.run_json([ 'ip', '-j', '-4', 'route', 'show', 'default' ])?.[0];
+	let host = match(url ?? '', /^[A-Za-z]+:\/\/([0-9.]+)[:\/]/)?.[1];
+
+	if (!r?.gateway && host)
+		r = util.run_json([ 'ip', '-j', '-4', 'route', 'get', host ])?.[0];
+
+	if (!r?.gateway || !r.dev)
+		return null;
+
+	let l = util.run_json([ 'ip', '-j', '-d', 'link', 'show', 'dev', r.dev ])?.[0];
+	let vlan = (l?.link == bridge && l?.linkinfo?.info_kind == 'vlan') ? l.linkinfo.info_data?.id : null;
+
+	return { ip: r.gateway, dev: r.dev, vid: vlan };
+}
+
+// The gateway's MAC address, from a neighbour entry that holds one.
+function gateway_mac(gw) {
+	for (let n in util.run_json([ 'ip', '-j', 'neigh', 'show', gw.ip, 'dev', gw.dev ]) ?? [])
+		if (n.lladdr && !('FAILED' in (n.state ?? [])) && !('INCOMPLETE' in (n.state ?? [])))
+			return n.lladdr;
+
+	return null;
+}
+
+// The uplink: the ports carrying the bridge port where mac was learned (all
+// members of a bond), on VLAN vid when given. member_of maps a port's
+// device to the bridge port that carries it.
+export function uplink_ports(fdb, ports, mac, vid, member_of) {
+	for (let e in fdb) {
+		if (!mac || lc(e.mac ?? '') != lc(mac) || 'self' in (e.flags ?? []) || e.state == 'permanent' || (vid && e.vlan && +e.vlan != vid))
+			continue;
+
+		let up = filter(ports, (p) => p.dev == e.ifname || member_of(p.dev) == e.ifname);
+
+		if (length(up))
+			return up;
+	}
+
+	return [];
+}
+
+// The uplink to report and what to remember: what was found while the
+// gateway's address is known, else the last one (by device, as ports are
+// rebuilt with the profile) while it has carrier. Returns [ ports, gateway
+// MAC, new last ].
+export function settle_uplink(up, gwmac, ports, last, carrier) {
+	if (gwmac)
+		return [ up, gwmac, { devs: map(up, (p) => p.dev), mac: gwmac } ];
+
+	let kept = filter(ports, (p) => p.dev in last.devs && carrier(p.dev));
+
+	return [ kept, length(kept) ? last.mac : null, last ];
+}
+
+// Marks the uplink ports (up) in the payload m. The controller takes as
+// uplink the port_table row whose LLDP neighbour's local_port_name equals
+// m.uplink: a bond member with a neighbour, else one with carrier. Without a
+// neighbour there, the gateway (gwmac) stands in for one.
+export function report_uplink(m, up, gwmac) {
+	let idxs = map(up, (p) => p.idx);
+	let row_of = (p) => filter(m.port_table, (r) => r.port_idx == p.idx)[0];
+	let has_lldp = (p) => length(filter(m.lldp_table, (r) => r.local_port_idx == p.idx)) > 0;
+
+	for (let r in m.port_table)
+		r.is_uplink = r.port_idx in idxs;
+
+	let pick = filter(up, has_lldp)[0] ?? filter(up, (p) => row_of(p)?.up)[0] ?? up[0];
+
+	if (!pick)
+		return;
+
+	m.uplink = port_name(pick);
+
+	if (gwmac && !has_lldp(pick))
+		push(m.lldp_table, { local_port_idx: pick.idx, local_port_name: m.uplink, chassis_id: gwmac, is_wired: true });
+}
+
 // `lldpcli -f json0 show neighbors`, keyed by local port.
 export function lldp_table(ports) {
 	let j = util.run_json([ 'lldpcli', '-f', 'json0', 'show', 'neighbors' ]);
@@ -290,7 +377,7 @@ export function lldp_table(ports) {
 
 		let row = {
 			local_port_idx: p.idx,
-			local_port_name: p.name ?? `Port ${p.idx}`,
+			local_port_name: port_name(p),
 			chassis_id: ch.id?.[0]?.value,
 			port_id: port?.id?.[0]?.value,
 			is_wired: true
@@ -415,7 +502,24 @@ export function inform(profile, state, extra) {
 	}
 
 	if (length(profile.ports)) {
-		let macs = mac_tables(profile.bridge, profile.ports);
+		// The uplink is the port the gateway answers on: ping it, then find
+		// where the bridge learned the address it answered from.
+		let gw = gateway(profile.bridge, m.inform_url);
+
+		if (gw)
+			util.run([ 'ping', '-c', '1', '-W', '1', gw.ip ]);
+
+		let fdb = util.run_json([ 'bridge', '-j', 'fdb', 'show', 'br', profile.bridge ]) ?? [];
+		let gwmac = gw ? gateway_mac(gw) : null;
+		let up = uplink_ports(fdb, profile.ports, gwmac, gw?.vid, bridge_member);
+
+		// No router at all: nothing to keep.
+		if (!gw)
+			last_uplink = { devs: [], mac: null };
+
+		[ up, gwmac, last_uplink ] = settle_uplink(up, gwmac, profile.ports, last_uplink, (d) => sysnet(d, 'carrier') == '1');
+
+		let macs = mac_tables(fdb, profile.ports);
 		let devopts = device_options();
 
 		m.port_table = map(profile.ports, (p) => {
@@ -426,6 +530,8 @@ export function inform(profile, state, extra) {
 
 		m.ethernet_table = [ { mac, name: 'eth0', num_port: length(profile.model_ports) } ];
 		m.lldp_table = lldp_table(profile.ports);
+
+		report_uplink(m, up, gwmac);
 	}
 
 	if (profile.type == 'usw') {

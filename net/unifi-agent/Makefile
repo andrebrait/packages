@@ -4,7 +4,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=unifi-agent
 PKG_VERSION:=0.1
-PKG_RELEASE:=4
+PKG_RELEASE:=5
 
 PKG_MAINTAINER:=Andre Brait <andrebrait@gmail.com>
 PKG_LICENSE:=GPL-2.0-only
@@ -17,7 +17,7 @@ define Package/unifi-agent
   TITLE:=Adopt this device into a UniFi Network controller
   DEPENDS:=+ucode +ucode-mod-fs +ucode-mod-uci +ucode-mod-socket \
 	+ucode-mod-struct +ucode-mod-zlib +libucode +libmbedtls \
-	+ip-bridge +ethtool
+	+ip +ip-bridge +ethtool
 endef
 
 define Package/unifi-agent/description
