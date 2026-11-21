@@ -13,6 +13,9 @@ const STP_STATES = [ 'disabled', 'listening', 'learning', 'forwarding', 'blockin
 let cpu_prev = null;
 let sfp_cache = {};
 
+// The devices of the last uplink found.
+let last_uplink = [];
+
 function num(path) {
 	let s = util.read(path);
 	return (s != null && match(s, /^-?[0-9]+$/)) ? +s : null;
@@ -168,6 +171,10 @@ function sfp_info(dev) {
 	return c.info;
 }
 
+function port_name(p) {
+	return p.name ?? `Port ${p.idx}`;
+}
+
 // The port that carries a member: itself, or the bond it is enslaved to.
 function bridge_member(dev) {
 	let master = readfile(`/sys/class/net/${dev}/master/uevent`);
@@ -187,7 +194,7 @@ export function port_row(p, dyn) {
 
 	let row = {
 		port_idx: p.idx,
-		name: p.name ?? `Port ${p.idx}`,
+		name: port_name(p),
 		ifname: dev,
 		media: p.model_media ?? p.media,
 		enable: sysnet(dev, 'flags') != null ? !!(hex(sysnet(dev, 'flags')) & 1) : true,
@@ -200,7 +207,7 @@ export function port_row(p, dyn) {
 		poe_caps: 0,
 		port_poe: false,
 		jumbo: mtu > 1500,
-		is_uplink: !!dyn?.uplink,
+		is_uplink: false,
 		stp_state: (brstate != null) ? STP_STATES[brstate] ?? 'disabled' : 'disabled',
 		stp_pathcost: num(`/sys/class/net/${member}/brport/path_cost`) ?? 0,
 		rx_bytes: stat_counter(dev, 'rx_bytes'),
@@ -272,38 +279,40 @@ export function mac_tables(fdb, ports) {
 	return by_dev;
 }
 
-// The MAC address of the next hop toward the inform URL's host: the host
-// itself on the same subnet, otherwise the router in front of it. A host
-// name is reached through the default route.
-function next_hop_mac(url) {
-	let host = match(url ?? '', /^[a-z]+:\/\/([0-9.]+)[:\/]/)?.[1];
-	let route = util.run_json(host ? [ 'ip', '-j', '-4', 'route', 'get', host ] : [ 'ip', '-j', '-4', 'route', 'show', 'default' ]);
-	let hop = route?.[0]?.gateway ?? host;
+// The default gateway: its address, the device it is reached through and,
+// when that device is a VLAN of the bridge, the VLAN.
+function gateway(bridge) {
+	let r = util.run_json([ 'ip', '-j', '-4', 'route', 'show', 'default' ])?.[0];
+	let v = match(r?.dev ?? '', /^(.+)\.([0-9]+)$/);
 
-	return hop ? util.run_json([ 'ip', '-j', 'neigh', 'show', hop ])?.[0]?.lladdr : null;
+	return r?.gateway ? { ip: r.gateway, dev: r.dev, vid: (v?.[1] == bridge) ? +v[2] : null } : null;
 }
 
-// The port the controller is reached through: the one where the bridge
-// learned the next hop's MAC address. member_of maps a port's device to
-// the bridge port that carries it (itself, or its bond).
-export function uplink_port(fdb, ports, mac, member_of) {
-	if (!mac)
-		return null;
-
-	for (let e in fdb) {
-		if (lc(e.mac ?? '') != lc(mac) || 'self' in (e.flags ?? []))
-			continue;
-
-		for (let p in ports)
-			if (p.dev == e.ifname || member_of(p.dev) == e.ifname)
-				return p;
-	}
+// The gateway's MAC address, from a neighbour entry that holds one.
+function gateway_mac(gw) {
+	for (let n in util.run_json([ 'ip', '-j', 'neigh', 'show', gw.ip, 'dev', gw.dev ]) ?? [])
+		if (n.lladdr && !('FAILED' in (n.state ?? [])) && !('INCOMPLETE' in (n.state ?? [])))
+			return n.lladdr;
 
 	return null;
 }
 
-// The last uplink found, kept while the next hop's address is not resolved.
-let last_uplink = null;
+// The uplink: the ports carrying the bridge port where mac was learned (all
+// members of a bond), on VLAN vid when given. member_of maps a port's
+// device to the bridge port that carries it.
+export function uplink_ports(fdb, ports, mac, vid, member_of) {
+	for (let e in fdb) {
+		if (!mac || e.mac != mac || 'self' in (e.flags ?? []) || e.state == 'permanent' || (vid && e.vlan && +e.vlan != vid))
+			continue;
+
+		let up = filter(ports, (p) => p.dev == e.ifname || member_of(p.dev) == e.ifname);
+
+		if (length(up))
+			return up;
+	}
+
+	return [];
+}
 
 // `lldpcli -f json0 show neighbors`, keyed by local port.
 export function lldp_table(ports) {
@@ -322,7 +331,7 @@ export function lldp_table(ports) {
 
 		let row = {
 			local_port_idx: p.idx,
-			local_port_name: p.name ?? `Port ${p.idx}`,
+			local_port_name: port_name(p),
 			chassis_id: ch.id?.[0]?.value,
 			port_id: port?.id?.[0]?.value,
 			is_wired: true
@@ -447,16 +456,35 @@ export function inform(profile, state, extra) {
 	}
 
 	if (length(profile.ports)) {
-		let fdb = util.run_json([ 'bridge', '-j', 'fdb', 'show', 'br', profile.bridge ]) ?? [];
+		let fdb_now = () => util.run_json([ 'bridge', '-j', 'fdb', 'show', 'br', profile.bridge ]) ?? [];
+		let fdb = fdb_now();
+		let gw = gateway(profile.bridge);
+		let gwmac = gw ? gateway_mac(gw) : null;
+		let up = uplink_ports(fdb, profile.ports, gwmac, gw?.vid, bridge_member);
+
+		// The uplink is the port toward the gateway. When it is not known, make
+		// the gateway answer once: that resolves its address and has the bridge
+		// learn it again after ageing out.
+		if (gw && !length(up)) {
+			util.run([ 'ping', '-c', '1', '-W', '1', gw.ip ]);
+			fdb = fdb_now();
+			gwmac = gateway_mac(gw);
+			up = uplink_ports(fdb, profile.ports, gwmac, gw.vid, bridge_member);
+		}
+
+		// Keep the last uplink (by device, as ports are rebuilt with the
+		// profile) while the gateway's address is not resolved.
+		if (gwmac)
+			last_uplink = map(up, (p) => p.dev);
+		else
+			up = filter(profile.ports, (p) => p.dev in last_uplink);
+
 		let macs = mac_tables(fdb, profile.ports);
 		let devopts = device_options();
-		let hop = next_hop_mac(m.inform_url);
-		let up = uplink_port(fdb, profile.ports, hop, bridge_member) ?? last_uplink;
-
-		last_uplink = up;
 
 		m.port_table = map(profile.ports, (p) => {
-			let row = port_row(p, { ...port_dynamic(p.dev, devopts[p.dev]), uplink: p == up });
+			let row = port_row(p, port_dynamic(p.dev, devopts[p.dev]));
+			row.is_uplink = p in up;
 			row.mac_table = macs[p.dev] ?? [];
 			return row;
 		});
@@ -465,15 +493,13 @@ export function inform(profile, state, extra) {
 		m.lldp_table = lldp_table(profile.ports);
 
 		// The controller marks as uplink the port_table row whose LLDP
-		// neighbour's local_port_name equals this; without a neighbour there,
-		// the next hop stands in for one.
-		if (up) {
-			let name = up.name ?? `Port ${up.idx}`;
+		// neighbour's local_port_name equals this; without a neighbour on the
+		// uplink, the gateway stands in for one.
+		if (length(up)) {
+			m.uplink = port_name(up[0]);
 
-			m.uplink = name;
-
-			if (hop && !length(filter(m.lldp_table, (r) => r.local_port_idx == up.idx)))
-				push(m.lldp_table, { local_port_idx: up.idx, local_port_name: name, chassis_id: hop, is_wired: true });
+			if (gwmac && !length(filter(m.lldp_table, (r) => r.local_port_idx == up[0].idx)))
+				push(m.lldp_table, { local_port_idx: up[0].idx, local_port_name: m.uplink, chassis_id: gwmac, is_wired: true });
 		}
 	}
 
