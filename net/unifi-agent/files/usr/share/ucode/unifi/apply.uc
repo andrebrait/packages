@@ -9,6 +9,7 @@ import * as util from 'unifi.util';
 import * as http from 'unifi.http';
 import * as sw from 'unifi.switch';
 import * as wifi from 'unifi.wifi';
+import { CATEGORIES } from 'unifi.profile';
 
 const PACKAGES = [ 'network', 'switchdev', 'wireless' ];
 const BACKUP = '/tmp/unifi-agent/rollback';
@@ -109,28 +110,65 @@ export function apply(text, profile, opts) {
 	for (let f in lsdir(save_dir) ?? [])
 		unlink(`${save_dir}/${f}`);
 
-	let c = cursor(opts.uci_dir, save_dir);
-	let notes = [];
-
 	// Switch keys come for switches and for APs with a built-in switch; an
 	// AP without them keeps its bridge as it is.
 	let switch_keys = length(filter(keys(cfg), (k) => match(k, /^switch\.(vlan|port)\./))) > 0;
 
-	if (switch_keys)
-		notes = [ ...notes, ...sw.plan(cfg, profile, c) ];
+	// Plans into cursor c; cats null means every category.
+	let plan_into = (c, cats) => {
+		let n = [];
 
-	if (length(profile.radios))
-		notes = [ ...notes, ...wifi.plan(cfg, profile, c, switch_keys) ];
+		if (switch_keys)
+			n = [ ...n, ...sw.plan(cfg, profile, c, cats) ];
 
-	let changes = {}, touched = [];
+		// The switch side owns WLAN VLAN membership only when it applies VLANs.
+		if (length(profile.radios) && (!cats || cats.wifi))
+			n = [ ...n, ...wifi.plan(cfg, profile, c, switch_keys && (!cats || cats.vlans)) ];
 
-	for (let pkg in PACKAGES) {
-		let ch = c.changes(pkg)?.[pkg];
+		return n;
+	};
+	let changes_of = (c) => {
+		let out = {};
 
-		if (type(ch) == 'array' && length(ch)) {
-			changes[pkg] = ch;
-			push(touched, pkg);
+		for (let pkg in PACKAGES) {
+			let ch = c.changes(pkg)?.[pkg];
+
+			if (type(ch) == 'array' && length(ch))
+				out[pkg] = ch;
 		}
+
+		return out;
+	};
+
+	// Log only plans everything; otherwise (a dry run included) only the
+	// chosen categories.
+	let logging = opts.dry_run || !profile.apply;
+	let cats = profile.apply ? profile.apply_cats : null;
+	let c = cursor(opts.uci_dir, save_dir);
+	let notes = plan_into(c, cats);
+	let changes = changes_of(c), touched = keys(changes);
+	let withheld = [];
+
+	// What the categories left out is still logged, as not applied.
+	if (cats && length(cats) < length(CATEGORIES)) {
+		let full_dir = `${save_dir}-full`;
+
+		util.mkdir_p(full_dir, 0o700);
+
+		for (let f in lsdir(full_dir) ?? [])
+			unlink(`${full_dir}/${f}`);
+
+		let full = cursor(opts.uci_dir, full_dir);
+		plan_into(full, null);
+
+		// By option, not by line: a value the chosen categories changed
+		// differently was applied, just not as the full plan has it.
+		let key = (l) => split(l, ' ')[1];
+		let applied = map(describe(changes), key);
+		withheld = filter(describe(changes_of(full)), (l) => !(key(l) in applied));
+
+		for (let pkg in PACKAGES)
+			full.revert(pkg);
 	}
 
 	let res = {
@@ -139,11 +177,15 @@ export function apply(text, profile, opts) {
 		rolled_back: false,
 		notes,
 		plan: describe(changes),
+		withheld,
 		unhandled: unhandled(cfg)
 	};
 
 	for (let n in notes)
 		log(`note: ${n}`);
+
+	for (let l in withheld)
+		log(`not applied: ${l}`);
 
 	if (!res.changed)
 		return res;
@@ -193,7 +235,9 @@ export function apply(text, profile, opts) {
 	for (let pkg in touched)
 		c.commit(pkg);
 
-	reload(touched);
+	if (!opts.no_reload)
+		reload(touched);
+
 	res.applied = true;
 
 	// One minute by the clock, however long each connection attempt takes

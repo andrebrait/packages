@@ -32,7 +32,7 @@ The agent speaks the UniFi inform protocol. Before a device is adopted it uses t
    ```sh
    uci set unifi-agent.main.inform_url='http://192.168.1.2:8080/inform'
    uci set unifi-agent.main.enabled='1'
-   uci set unifi-agent.main.apply='1'    # leave '0' to only log at first
+   uci set unifi-agent.main.apply='1'    # or: uci add_list unifi-agent.main.apply='vlans'; leave '0' to only log
    uci commit unifi-agent
    /etc/init.d/unifi-agent enable
    /etc/init.d/unifi-agent start
@@ -42,7 +42,7 @@ The agent speaks the UniFi inform protocol. Before a device is adopted it uses t
 3. In the controller, adopt the device. It appears as pending, under the chosen model's name.
 4. Watch the log with `logread -e unifi-agent`. Every change the controller asks for is logged as a plan line before it is applied.
 
-Out of the box, and whenever `option apply` is unset, the agent only logs what it would change; set `option apply '1'` to apply. `unifi-agent plan <file>` translates a saved `system_cfg` without changing anything. The last one received is kept in `/tmp/unifi-agent/system_cfg`.
+Out of the box, and whenever `option apply` is unset, the agent only logs what it would change. `option apply '1'` applies everything; `list apply` with some of `vlans`, `ports` (enable, speed and duplex, flow control, EEE, isolation, PoE), `lag`, `stp`, `igmp`, `jumbo`, `mirror` (mirroring and rate limits) and `wifi` applies only those. What the other categories would change is logged as `not applied:`. With `lag` off, aggregated ports are treated as plain ports. `unifi-agent plan <file>` translates a saved `system_cfg` without changing anything. The last one received is kept in `/tmp/unifi-agent/system_cfg`.
 
 LuCI users get the same front panel and every setting under Services → UniFi controller (`luci-app-unifi-agent`).
 

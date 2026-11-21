@@ -3,6 +3,8 @@
 import * as t from 'assert';
 import * as sw from 'unifi.switch';
 import * as util from 'unifi.util';
+import * as apply from 'unifi.apply';
+import * as profile_mod from 'unifi.profile';
 import { cursor } from 'uci';
 import { readfile } from 'fs';
 
@@ -91,5 +93,44 @@ let cq = cursor('/tmp/uci-p', '/tmp/uci-p/save2');
 sw.plan(util.parse_kv('switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\nswitch.port.1.flowctrl=enabled\n'),
 	{ ...profile, bridge: 'switch', ports: [ { idx: 1, dev: 'lan5', media: 'SFP+', model_media: 'GE', speeds: [] } ] }, cq);
 t.eq(cq.get('network', 'old5', 'pause'), null, 'local media decides');
+
+// Categories: VLANs only leaves ports, STP and flow control alone, and the
+// withheld changes are still listed.
+t.eq(profile_mod.apply_categories([ 'vlans', 'bogus' ]), { vlans: true }, 'category list');
+t.eq(length(profile_mod.apply_categories('1')), length(profile_mod.CATEGORIES), "'1' means all");
+t.eq(profile_mod.apply_categories('0'), {}, "'0' means none");
+
+system(`rm -rf /tmp/uci-c && mkdir -p /tmp/uci-c && cp '${DIR}'/lg510s-vlanonly/* /tmp/uci-c/`);
+let ccfg = 'switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\nswitch.vlan.2.id=10\nswitch.vlan.2.mode=tagged\nswitch.vlan.2.status=enabled\nswitch.stp.status=enabled\nswitch.port.1.flowctrl=enabled\nswitch.port.1.status=disabled\n';
+let cprof = { ...profile, bridge: 'switch', apply: true, apply_cats: { vlans: true } };
+let res = apply.apply(ccfg, cprof, { uci_dir: '/tmp/uci-c', save_dir: '/tmp/uci-c/agent', user_save_dir: '/tmp/uci-c/user', no_reload: true, log: () => null });
+let cc = cursor('/tmp/uci-c', '/tmp/uci-c/none');
+t.ok(res.applied, 'vlans applied');
+t.eq(cc.get('network', 'unifi_vlan10', 'vlan'), '10', 'VLAN 10 created');
+t.eq(cc.get('network', 'switch', 'stp'), null, 'STP not applied');
+t.eq(cc.get('network', 'unifi_lan1'), null, 'no port settings applied');
+t.ok(length(filter(res.withheld, (l) => index(l, 'stp') >= 0)) > 0, 'STP listed as withheld');
+t.ok(length(filter(res.withheld, (l) => index(l, 'enabled') >= 0)) > 0, 'port disable listed as withheld');
+
+// lag without vlans is not applied; mirror off keeps the destination port in its VLANs.
+let cl = cursor('/tmp/uci-c', '/tmp/uci-c/lagonly');
+let ln = sw.plan(util.parse_kv(ccfg + 'switch.port.3.opmode=aggregate\nswitch.port.3.lag=1\nswitch.port.4.opmode=aggregate\nswitch.port.4.lag=1\n'), { ...profile, bridge: 'switch' }, cl, { lag: true });
+t.eq(cl.get('network', 'unifi_lag1'), null, 'no bond without vlans');
+t.ok(length(filter(ln, (n) => index(n, 'only together with VLANs') >= 0)) == 1, 'noted');
+let cm = cursor('/tmp/uci-c', '/tmp/uci-c/mirror');
+sw.plan(util.parse_kv(ccfg + 'switch.port.6.opmode=mirror\nswitch.port.6.mirror_port=2\n'), { ...profile, bridge: 'switch' }, cm, { vlans: true });
+t.ok('lan6:u*' in cm.get('network', 'unifi_vlan1', 'ports'), 'mirror port keeps its VLAN when mirroring is not applied');
+
+// An existing agent bond keeps its VLANs when lag is not applied.
+let cb0 = cursor('/tmp/uci-c', '/tmp/uci-c/seedb');
+cb0.set('network', 'unifi_lag1', 'device');
+cb0.set('network', 'unifi_lag1', 'type', 'bonding');
+cb0.set('network', 'unifi_lag1', 'name', 'lag1');
+cb0.set('network', 'unifi_lag1', 'ports', [ 'lan3', 'lan4' ]);
+cb0.commit('network');
+let cb = cursor('/tmp/uci-c', '/tmp/uci-c/bond');
+sw.plan(util.parse_kv(ccfg), { ...profile, bridge: 'switch' }, cb, { vlans: true });
+t.ok('lag1:u*' in cb.get('network', 'unifi_vlan1', 'ports'), 'existing bond keeps VLAN 1');
+t.ok(!('lan3:u*' in cb.get('network', 'unifi_vlan1', 'ports')), 'bond members not added to VLANs');
 
 t.done();
