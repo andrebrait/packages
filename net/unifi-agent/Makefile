@@ -17,7 +17,7 @@ define Package/unifi-agent
   TITLE:=Adopt this device into a UniFi Network controller
   DEPENDS:=+ucode +ucode-mod-fs +ucode-mod-uci +ucode-mod-socket \
 	+ucode-mod-struct +ucode-mod-zlib +libucode +libmbedtls \
-	+ip-bridge +ethtool
+	+ip +ip-bridge +ethtool
 endef
 
 define Package/unifi-agent/description

@@ -513,6 +513,10 @@ export function inform(profile, state, extra) {
 		let gwmac = gw ? gateway_mac(gw) : null;
 		let up = uplink_ports(fdb, profile.ports, gwmac, gw?.vid, bridge_member);
 
+		// No router at all: nothing to keep.
+		if (!gw)
+			last_uplink = { devs: [], mac: null };
+
 		[ up, gwmac, last_uplink ] = settle_uplink(up, gwmac, profile.ports, last_uplink, (d) => sysnet(d, 'carrier') == '1');
 
 		let macs = mac_tables(fdb, profile.ports);
