@@ -23,4 +23,18 @@ t.eq(fx.sfp_compliance, 'Ethernet: 100BASE-FX', 'fallback is the first type');
 let q = collect.parse_sfp('\tTx fault : [ No, No, No, No ]\n\tRx loss of signal : [ Yes, No, No, No ]\n');
 t.eq([ q.sfp_txfault, q.sfp_rxfault ], [ false, true ], 'QSFP faults');
 
+// The uplink is the port where the next hop's MAC was learned; "self" entries
+// are the hardware's copy, and a bond stands for its members.
+let ports = [ { idx: 1, dev: 'lan1' }, { idx: 2, dev: 'lan2' }, { idx: 5, dev: 'lan5' } ];
+let fdb = [
+	{ mac: 'aa:bb:cc:00:00:01', ifname: 'lan1', flags: [ 'self' ] },
+	{ mac: 'aa:bb:cc:00:00:01', ifname: 'lan2', master: 'switch' },
+	{ mac: 'aa:bb:cc:00:00:02', ifname: 'unifi_lag1', master: 'switch' }
+];
+let member = (d) => (d == 'lan5') ? 'unifi_lag1' : d;
+t.eq(collect.uplink_port(fdb, ports, 'AA:BB:CC:00:00:01', member)?.idx, 2, 'learned port, not the self entry');
+t.eq(collect.uplink_port(fdb, ports, 'aa:bb:cc:00:00:02', member)?.idx, 5, 'bond member');
+t.eq([ collect.uplink_port(fdb, ports, 'aa:bb:cc:00:00:03', member), collect.uplink_port(fdb, ports, null, member) ], [ null, null ], 'unknown or no next hop');
+t.eq(collect.mac_tables(fdb, ports).lan2, [ { mac: 'aa:bb:cc:00:00:01', age: 0, uptime: 0, static: false } ], 'mac table skips self entries');
+
 t.done();

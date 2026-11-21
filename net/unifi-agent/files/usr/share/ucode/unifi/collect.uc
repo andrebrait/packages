@@ -200,7 +200,7 @@ export function port_row(p, dyn) {
 		poe_caps: 0,
 		port_poe: false,
 		jumbo: mtu > 1500,
-		is_uplink: !!p.uplink,
+		is_uplink: !!dyn?.uplink,
 		stp_state: (brstate != null) ? STP_STATES[brstate] ?? 'disabled' : 'disabled',
 		stp_pathcost: num(`/sys/class/net/${member}/brport/path_cost`) ?? 0,
 		rx_bytes: stat_counter(dev, 'rx_bytes'),
@@ -246,8 +246,7 @@ export function port_row(p, dyn) {
 }
 
 // `bridge -j fdb show br <bridge>`: learned addresses per port.
-export function mac_tables(bridge, ports) {
-	let fdb = util.run_json([ 'bridge', '-j', 'fdb', 'show', 'br', bridge ]) ?? [];
+export function mac_tables(fdb, ports) {
 	let by_dev = {}, own = {};
 
 	for (let p in ports) {
@@ -272,6 +271,39 @@ export function mac_tables(bridge, ports) {
 
 	return by_dev;
 }
+
+// The MAC address of the next hop toward the inform URL's host: the host
+// itself on the same subnet, otherwise the router in front of it. A host
+// name is reached through the default route.
+function next_hop_mac(url) {
+	let host = match(url ?? '', /^[a-z]+:\/\/([0-9.]+)[:\/]/)?.[1];
+	let route = util.run_json(host ? [ 'ip', '-j', '-4', 'route', 'get', host ] : [ 'ip', '-j', '-4', 'route', 'show', 'default' ]);
+	let hop = route?.[0]?.gateway ?? host;
+
+	return hop ? util.run_json([ 'ip', '-j', 'neigh', 'show', hop ])?.[0]?.lladdr : null;
+}
+
+// The port the controller is reached through: the one where the bridge
+// learned the next hop's MAC address. member_of maps a port's device to
+// the bridge port that carries it (itself, or its bond).
+export function uplink_port(fdb, ports, mac, member_of) {
+	if (!mac)
+		return null;
+
+	for (let e in fdb) {
+		if (lc(e.mac ?? '') != lc(mac) || 'self' in (e.flags ?? []))
+			continue;
+
+		for (let p in ports)
+			if (p.dev == e.ifname || member_of(p.dev) == e.ifname)
+				return p;
+	}
+
+	return null;
+}
+
+// The last uplink found, kept while the next hop's address is not resolved.
+let last_uplink = null;
 
 // `lldpcli -f json0 show neighbors`, keyed by local port.
 export function lldp_table(ports) {
@@ -415,17 +447,34 @@ export function inform(profile, state, extra) {
 	}
 
 	if (length(profile.ports)) {
-		let macs = mac_tables(profile.bridge, profile.ports);
+		let fdb = util.run_json([ 'bridge', '-j', 'fdb', 'show', 'br', profile.bridge ]) ?? [];
+		let macs = mac_tables(fdb, profile.ports);
 		let devopts = device_options();
+		let hop = next_hop_mac(m.inform_url);
+		let up = uplink_port(fdb, profile.ports, hop, bridge_member) ?? last_uplink;
+
+		last_uplink = up;
 
 		m.port_table = map(profile.ports, (p) => {
-			let row = port_row(p, port_dynamic(p.dev, devopts[p.dev]));
+			let row = port_row(p, { ...port_dynamic(p.dev, devopts[p.dev]), uplink: p == up });
 			row.mac_table = macs[p.dev] ?? [];
 			return row;
 		});
 
 		m.ethernet_table = [ { mac, name: 'eth0', num_port: length(profile.model_ports) } ];
 		m.lldp_table = lldp_table(profile.ports);
+
+		// The controller marks as uplink the port_table row whose LLDP
+		// neighbour's local_port_name equals this; without a neighbour there,
+		// the next hop stands in for one.
+		if (up) {
+			let name = up.name ?? `Port ${up.idx}`;
+
+			m.uplink = name;
+
+			if (hop && !length(filter(m.lldp_table, (r) => r.local_port_idx == up.idx)))
+				push(m.lldp_table, { local_port_idx: up.idx, local_port_name: name, chassis_id: hop, is_wired: true });
+		}
 	}
 
 	if (profile.type == 'usw') {
