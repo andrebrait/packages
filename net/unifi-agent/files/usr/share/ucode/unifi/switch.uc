@@ -285,14 +285,12 @@ export function plan(cfg, profile, c, cats) {
 		setopt(c, 'network', brsec, 'stp', stp ? '1' : null);
 		setopt(c, 'network', brsec, 'stp_proto', stp ? ((cfg['switch.stp.version'] == 'stp') ? 'stp' : 'rstp') : null);
 		setopt(c, 'network', brsec, 'priority', (stp && cfg['switch.stp.priority'] != null) ? +cfg['switch.stp.priority'] : null);
-
-		for (let k, v in cfg) {
-			let n = match(k, /^switch\.port\.([0-9]+)\.stp\.port_mode$/);
-
-			if (stp && n && v == 'disabled')
-				push(notes, `port ${n[1]}: STP cannot be turned off per port; it stays on`);
-		}
 	}
+
+	// Noted whatever the apply categories are: nothing else reports it.
+	for (let n, sp in sw.ports)
+		if (stp && by_idx[n] && sp['stp.port_mode'] == 'disabled')
+			push(notes, `port ${n} (${by_idx[n].dev}): STP cannot be turned off per port; it stays on`);
 
 	let igmp = false, snoop = {}, querier = {}, fastleave = {};
 
