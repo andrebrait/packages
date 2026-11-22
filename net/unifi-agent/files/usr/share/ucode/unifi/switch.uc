@@ -17,6 +17,8 @@
 //   switch.port.N.poe                      device pse (PoE-capable ports only)
 //   switch.jumboframes, switch.mtu         device mtu on every port and bridge
 //   switch.stp.{status,version,priority}   bridge stp, stp_proto, priority
+//   switch.port.N.stp.port_mode            nothing applied: the bridge cannot turn STP off
+//                                          per port; noted when disabled
 //   switch.vlan.M.igmp_*                   bridge igmp_snooping, bridge-vlan
 //                                          mcast_snooping / mcast_querier,
 //                                          device multicast_fast_leave
@@ -29,7 +31,7 @@ import { is_fiber } from 'unifi.profile';
 const HANDLED = [
 	/^switch\.vlan\.[0-9]+\.(id|mode|status|igmp_snooping|igmp_fastleave|igmp_querier_status)$/,
 	/^switch\.vlan\.[0-9]+\.port\.[0-9]+\.mode$/,
-	/^switch\.port\.[0-9]+\.(name|opmode|lag|pvid|status|autoneg|speed|duplex|flowctrl|eee|isolation|mirror_port|egress_rate_limit_kbps|poe)$/,
+	/^switch\.port\.[0-9]+\.(name|opmode|lag|pvid|status|autoneg|speed|duplex|flowctrl|eee|isolation|mirror_port|egress_rate_limit_kbps|poe|stp\.port_mode)$/,
 	/^switch\.(managementvlan|jumboframes|mtu|stp\.status|stp\.version|stp\.priority)$/,
 	// Informational or controller-internal: nothing to apply.
 	/^switch\.(wevent\.|power_source\.|routing_enabled)/,
@@ -284,6 +286,11 @@ export function plan(cfg, profile, c, cats) {
 		setopt(c, 'network', brsec, 'stp_proto', stp ? ((cfg['switch.stp.version'] == 'stp') ? 'stp' : 'rstp') : null);
 		setopt(c, 'network', brsec, 'priority', (stp && cfg['switch.stp.priority'] != null) ? +cfg['switch.stp.priority'] : null);
 	}
+
+	// Noted whatever the apply categories are: nothing else reports it.
+	for (let n, sp in sw.ports)
+		if (stp && by_idx[n] && sp['stp.port_mode'] == 'disabled')
+			push(notes, `port ${n} (${by_idx[n].dev}): STP cannot be turned off per port`);
 
 	let igmp = false, snoop = {}, querier = {}, fastleave = {};
 
