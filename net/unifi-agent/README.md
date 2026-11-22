@@ -78,7 +78,7 @@ A model with more ports than the device works: the extra UniFi ports are simply 
 | Link aggregation (UniFi uses LACP only) | a netifd `bonding` device `lagN`, mode 802.3ad, replacing its members in the bridge |
 | Jumbo frames | `mtu` on the ports and the bridge |
 | Spanning tree (STP or RSTP, bridge priority) | bridge `stp`, `stp_proto`, `priority` (RSTP needs `ustp`) |
-| Per-port spanning tree off | not supported: the Linux bridge runs STP on every port; logged as a note while bridge STP is on |
+| Per-port spanning tree off | not supported: the Linux bridge runs STP on every port; logged as a note while the controller enables STP |
 | IGMP snooping, querier, fast leave | bridge `igmp_snooping`, `bridge-vlan` `mcast_snooping` and `mcast_querier`, device `multicast_fast_leave` |
 | Port mirroring, egress rate limit | `switchdev-config` sections, when that package is installed |
 | PoE mode | device `pse`, only on ports marked `poe` |

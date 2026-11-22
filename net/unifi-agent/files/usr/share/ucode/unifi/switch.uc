@@ -290,7 +290,7 @@ export function plan(cfg, profile, c, cats) {
 	// Noted whatever the apply categories are: nothing else reports it.
 	for (let n, sp in sw.ports)
 		if (stp && by_idx[n] && sp['stp.port_mode'] == 'disabled')
-			push(notes, `port ${n} (${by_idx[n].dev}): STP cannot be turned off per port; it stays on`);
+			push(notes, `port ${n} (${by_idx[n].dev}): STP cannot be turned off per port`);
 
 	let igmp = false, snoop = {}, querier = {}, fastleave = {};
 
