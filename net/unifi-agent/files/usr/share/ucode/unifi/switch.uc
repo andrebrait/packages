@@ -17,7 +17,7 @@
 //   switch.port.N.poe                      device pse (PoE-capable ports only)
 //   switch.jumboframes, switch.mtu         device mtu on every port and bridge
 //   switch.stp.{status,version,priority}   bridge stp, stp_proto, priority
-//   switch.port.N.stp.port_mode            none: the bridge cannot turn STP off
+//   switch.port.N.stp.port_mode            nothing applied: the bridge cannot turn STP off
 //                                          per port; noted when disabled
 //   switch.vlan.M.igmp_*                   bridge igmp_snooping, bridge-vlan
 //                                          mcast_snooping / mcast_querier,
