@@ -50,6 +50,10 @@ t.eq(c2.changes('network'), {}, 'idempotent');
 // Unhandled-key filter.
 t.ok(sw.handled('switch.vlan.2.port.3.mode'), 'handled matrix');
 t.ok(!sw.handled('switch.port.1.stp.edge'), 'stp edge unhandled');
+t.ok(sw.handled('switch.port.1.stp.port_mode'), 'stp port_mode handled');
+let stpn = (cfgtext) => filter(sw.plan(util.parse_kv(cfgtext), profile, cursor('/tmp/uci-t', '/tmp/uci-t/stp'), { stp: true }), (n) => index(n, 'STP cannot') >= 0);
+t.eq(stpn('switch.stp.status=enabled\nswitch.port.2.stp.port_mode=disabled\nswitch.port.3.stp.port_mode=enabled\n'), [ 'port 2: STP cannot be turned off per port; it stays on' ], 'per-port STP off noted');
+t.eq(stpn('switch.stp.status=disabled\nswitch.port.2.stp.port_mode=disabled\n'), [], 'no note with bridge STP off');
 
 // The same bridge through the switch translation: every member stays.
 system(`rm -rf /tmp/uci-v && mkdir -p /tmp/uci-v/save && cp '${DIR}'/lg510s-vlanonly/* /tmp/uci-v/`);
